@@ -90,10 +90,11 @@ After delegation:
    - commit SHA;
    - actual model/model family if observable;
    - unresolved risks;
-   - whether independent review is recommended or required.
+   - whether independent review is recommended or required;
+   - Review decision reason: one short sentence stating why review was required, not required, or blocked (e.g. REVIEW_BLOCKED_MODEL_UNKNOWN: required but actual implementation family not reliably observable).
 5. Make the independent-review decision.
-6. If review is not required, report that decision and stop.
-7. If review is required but the actual implementation model family is unknown, report REVIEW_BLOCKED_MODEL_UNKNOWN and stop.
+6. If review is not required, report that decision, include the Review decision reason, and stop.
+7. If review is required but the actual implementation model family is unknown, report REVIEW_BLOCKED_MODEL_UNKNOWN, include the Review decision reason, and stop.
 8. If review is required and the family is known, delegate to the opposite-family reviewer in a fresh child session.
-9. Inspect and report the reviewer verdict.
+9. Inspect and report the reviewer verdict; include the Review decision reason in the report.
 10. Stop after the first review verdict. Do not automatically fix or re-review in v3a.

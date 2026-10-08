@@ -30,6 +30,7 @@ Execute the v3a implementation and conditional review workflow:
 11. Decide whether independent review is required using policies/review-routing.md and the risk/complexity of the implemented change.
 12. If review is not required:
     - report "Independent review: not required";
+    - include the Review decision reason in the report;
     - summarize the implementation handoff;
     - stop.
 13. If review is required:
@@ -37,6 +38,7 @@ Execute the v3a implementation and conditional review workflow:
     - never infer it from the capability tier, 9Router combo name, or fallback ordering.
 14. If the actual family is unknown:
     - report `REVIEW_BLOCKED_MODEL_UNKNOWN`;
+    - include the Review decision reason in the report;
     - explain that independent review is required but opposite-family routing cannot be selected safely;
     - stop without guessing.
 15. If the actual family is known:
@@ -45,5 +47,5 @@ Execute the v3a implementation and conditional review workflow:
     - use a fresh reviewer child session;
     - require read-only review against the authoritative SPEC/task, repository instructions, committed diff, validation evidence, acceptance criteria, regressions, and relevant security/data boundaries;
     - require exactly one verdict: PASS, PASS_WITH_NOTES, or CHANGES_REQUIRED.
-16. Report the reviewer, verdict, findings, and implementation commit.
+16. Report the reviewer, verdict, findings, implementation commit, and Review decision reason.
 17. Do not automatically fix CHANGES_REQUIRED in v3a. Stop after the first review verdict.
