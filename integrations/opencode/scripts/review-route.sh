@@ -8,9 +8,11 @@
 #       Runs resolve-model-family.sh, strictly validates its output, and prints either
 #         model_resolution=resolved family= reviewer= models= providers=      (exit 0)
 #         model_resolution=blocked status=REVIEW_BLOCKED_MODEL_RESOLUTION reason=<REASON>  (exit 3)
-#       Family classification stays in the resolver; this only checks that the output is
-#       well formed and that family and reviewer agree (claude -> review-openai,
-#       non-claude -> review-claude). Anything else fails closed. No guessing.
+#       Family classification stays in the resolver; this only checks the output against the
+#       documented resolver schemas (exact key sets, no duplicates/extras, documented
+#       status/reason/exit-code triples) and that family and reviewer agree
+#       (claude -> review-openai, non-claude -> review-claude). Anything else becomes
+#       RESOLVER_OUTPUT_INVALID. Resolver reasons are only propagated from a fixed list.
 #
 # Env: NINEROUTER_DB (default ~/.9router/db/data.sqlite). DEV_AGENTS_RESOLVER overrides the
 # resolver path (tests only).
@@ -83,27 +85,59 @@ resolve() {
     esac
   done <<< "$out"
 
-  if [[ $rc -ne 0 ]]; then
-    # Non-success: surface the resolver's own stable reason; never a family.
-    if [[ "$status" != "resolved" && -z "$family" && -z "$reviewer" && "$reason" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]]; then
-      blocked "$reason"
-    fi
-    blocked RESOLVER_OUTPUT_INVALID
-  fi
+  # Exact key set (duplicates were already rejected, so a sorted comparison is exact).
+  local keyset want
+  keyset=$(printf '%s\n' $seen | sort | paste -sd, -)
 
-  [[ "$status" == "resolved" && -z "$reason" ]] || blocked RESOLVER_OUTPUT_INVALID
-  [[ "$combo" == "$alias" && "$window" == "$((10#$start))-$((10#$end))" ]] || blocked RESOLVER_OUTPUT_INVALID
-  [[ -n "$models" && -n "$providers" ]] || blocked RESOLVER_OUTPUT_INVALID
-  case "$family/$reviewer" in
-    claude/review-openai | non-claude/review-claude) ;;
+  local list_re='^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$' ids_re='^[0-9]+(,[0-9]+)*$'
+
+  case "$status" in
+    resolved)
+      want="combo,family,models,providers,reviewer,status,usage_ids,window"
+      [[ $rc -eq 0 && "$keyset" == "$want" ]] || blocked RESOLVER_OUTPUT_INVALID
+      [[ "$combo" == "$alias" && "$window" == "$((10#$start))-$((10#$end))" ]] || blocked RESOLVER_OUTPUT_INVALID
+      [[ "$models" =~ $list_re && "$providers" =~ $list_re && "$usage_ids" =~ $ids_re ]] || blocked RESOLVER_OUTPUT_INVALID
+      case "$family/$reviewer" in
+        claude/review-openai | non-claude/review-claude) ;;
+        *) blocked RESOLVER_OUTPUT_INVALID ;;
+      esac
+      echo "model_resolution=resolved"
+      echo "family=$family"
+      echo "reviewer=$reviewer"
+      echo "models=$models"
+      echo "providers=$providers"
+      ;;
+    ambiguous)
+      want="combo,families,models,providers,reason,status"
+      [[ $rc -eq 5 && "$reason" == "MODEL_DETECTION_AMBIGUOUS" && "$keyset" == "$want" ]] || blocked RESOLVER_OUTPUT_INVALID
+      [[ "$combo" == "$alias" && "$families" == "claude,non-claude" ]] || blocked RESOLVER_OUTPUT_INVALID
+      [[ "$models" =~ $list_re && "$providers" =~ $list_re ]] || blocked RESOLVER_OUTPUT_INVALID
+      blocked MODEL_DETECTION_AMBIGUOUS
+      ;;
+    failed)
+      # Only documented reasons, each with its documented exit code. The reason echoed
+      # below is always one of these constants, never raw resolver text.
+      local want_rc="" has_combo=0
+      case "$reason" in
+        USAGE | INVALID_CHECKPOINT | INVALID_WINDOW | INVALID_COMBO_NAME | SQLITE3_NOT_FOUND | DB_NOT_FOUND | DB_NOT_READABLE) want_rc=2 ;;
+        COMBO_NOT_FOUND) want_rc=3; has_combo=1 ;;
+        MODEL_DETECTION_FAILED) want_rc=4; has_combo=1 ;;
+        RUNTIME_ERROR | MODEL_PARSE_FAILED) want_rc=6 ;;
+        MODEL_FAMILY_UNKNOWN) want_rc=7 ;;
+        MODEL_ATTRIBUTION_UNKNOWN) want_rc=8 ;;
+        UNSAFE_OUTPUT_VALUE) want_rc=9 ;;
+        *) blocked RESOLVER_OUTPUT_INVALID ;;
+      esac
+      [[ $rc -eq $want_rc ]] || blocked RESOLVER_OUTPUT_INVALID
+      if [[ $has_combo -eq 1 ]]; then
+        [[ "$keyset" == "combo,reason,status" && "$combo" == "$alias" ]] || blocked RESOLVER_OUTPUT_INVALID
+      else
+        [[ "$keyset" == "reason,status" ]] || blocked RESOLVER_OUTPUT_INVALID
+      fi
+      blocked "$reason"
+      ;;
     *) blocked RESOLVER_OUTPUT_INVALID ;;
   esac
-
-  echo "model_resolution=resolved"
-  echo "family=$family"
-  echo "reviewer=$reviewer"
-  echo "models=$models"
-  echo "providers=$providers"
 }
 
 case "${1:-}" in

@@ -73,7 +73,7 @@ The resolver is strictly read-only: it opens SQLite with `-readonly` and `PRAGMA
 
 ## Runtime family detection flow (v3b.2)
 
-Helper: `integrations/opencode/scripts/review-route.sh` (bash 3.2+, `sqlite3` only). Tests: `integrations/opencode/scripts/test-review-route.sh` (temporary DBs and stub resolvers only; never the live DB).
+Helper: `review-route.sh` (bash 3.2+, `sqlite3` only), located by the helper-resolution rule below. Tests: `integrations/opencode/scripts/test-review-route.sh` (temporary DBs and stub resolvers only; never the live DB).
 
 1. **Start checkpoint** immediately before delegating: `review-route.sh checkpoint start` runs the read-only query below and validates one integer (`^[0-9]{1,15}$`).
 2. **Delegate** to the already-selected agent. The capability alias stays in orchestration state and becomes the resolver `<combo-name>`.
@@ -90,20 +90,35 @@ sqlite3 -init /dev/null -batch -list -noheader -readonly "$DB" ".timeout 2000" "
 
 `DB` is `${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}`. No credential-bearing columns, no writes.
 
-If the start checkpoint fails the orchestrator does not delegate (reported as a runtime-model-resolution setup failure, `START_CHECKPOINT_FAILED`). Only a certainly trivial, low-risk, non-control-plane task may proceed, reporting `Start checkpoint: unavailable` and `Model resolution: skipped (not needed)`. Control-plane tasks never proceed.
+**Helper lookup (identical to the rule in `agents/orchestrator.md`; `commands/implement-spec.md` refers to it):**
+
+Order: (1) the installed `~/.config/opencode/scripts/review-route.sh`, if executable; (2) otherwise, only when running from a dev-agents checkout (the git top level contains `integrations/opencode/agents/orchestrator.md`), `integrations/opencode/scripts/review-route.sh` at that top level, if executable; (3) otherwise `REVIEW_ROUTE_HELPER_UNAVAILABLE`. No other path is ever used. The install step above copies the helper next to `resolve-model-family.sh`, which the helper finds in its own directory. Before delegation a missing helper reports `Review/runtime setup: blocked`, `Model resolution: blocked`, `Model resolution reason: REVIEW_ROUTE_HELPER_UNAVAILABLE` and delegates nothing; after delegation it is `REVIEW_BLOCKED_MODEL_RESOLUTION` with that reason and no reviewer.
+
+**Checkpoints are mandatory, with no exceptions.**
+
+- No valid start checkpoint => no delegation to `economy`/`standard`/`strong`/`premium`, for any task (docs-only, economy, low-risk, review-not-required, or otherwise). Report `Review/runtime setup: blocked`, `Model resolution: blocked`, `Model resolution reason: START_CHECKPOINT_FAILED`; stop.
+- Child returned but the end checkpoint fails => stop blocked regardless of the review decision. Report `Model resolution: blocked`, `Model resolution reason: END_CHECKPOINT_FAILED`, `Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION`; never mark it unavailable and never continue to normal completion.
+
+**Resolver output accepted by `review-route.sh resolve`** (checked against `resolve-model-family.sh`; anything else is `RESOLVER_OUTPUT_INVALID`). Every line is `key=value` with `[A-Za-z0-9._,-]` values; no duplicate, missing, or extra keys.
+
+- `status=resolved` (exit exactly 0): exactly one each of `status`, `combo`, `window`, `family`, `reviewer`, `models`, `providers`, `usage_ids`. `combo` equals the requested alias; `window` equals `<start>-<end>` (numeric, normalized); `family` is `claude` (`reviewer=review-openai`) or `non-claude` (`reviewer=review-claude`); `models`/`providers` are non-empty comma lists of safe values; `usage_ids` is a non-empty comma list of digits. `families` or `reason` in a resolved result is invalid.
+- `status=ambiguous` (exit 5): exactly `status`, `combo` (= requested alias), `reason=MODEL_DETECTION_AMBIGUOUS`, `models`, `families=claude,non-claude`, `providers`. Blocks with `MODEL_DETECTION_AMBIGUOUS`.
+- `status=failed`: exactly `status` and `reason` (plus `combo` = requested alias for `COMBO_NOT_FOUND` and `MODEL_DETECTION_FAILED`), with the documented exit code: 2 `USAGE`/`INVALID_CHECKPOINT`/`INVALID_WINDOW`/`INVALID_COMBO_NAME`/`SQLITE3_NOT_FOUND`/`DB_NOT_FOUND`/`DB_NOT_READABLE`; 3 `COMBO_NOT_FOUND`; 4 `MODEL_DETECTION_FAILED`; 6 `RUNTIME_ERROR`/`MODEL_PARSE_FAILED`; 7 `MODEL_FAMILY_UNKNOWN`; 8 `MODEL_ATTRIBUTION_UNKNOWN`; 9 `UNSAFE_OUTPUT_VALUE`. Blocks with that fixed reason constant (never raw resolver text).
+- Undocumented status or reason, status/reason mismatch, exit-code/schema disagreement, or any other output: `RESOLVER_OUTPUT_INVALID`.
 
 | Outcome | Behavior |
 | --- | --- |
-| Review not required | Resolution skipped; no family claimed; stop |
+| Review not required (valid start and end checkpoints) | Resolution skipped; no family claimed; stop |
 | `status=resolved`, `family=claude`, `reviewer=review-openai` | Launch `review-openai` |
 | `status=resolved`, `family=non-claude`, `reviewer=review-claude` | Launch `review-claude` |
-| Family/reviewer mismatch, missing/duplicate/unknown keys, bad output | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `RESOLVER_OUTPUT_INVALID`; no reviewer |
+| Documented resolver failure or ambiguity (schemas above) | `REVIEW_BLOCKED_MODEL_RESOLUTION` with that documented reason; no reviewer |
+| Undocumented status/reason, status/reason or exit-code mismatch, schema violation | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `RESOLVER_OUTPUT_INVALID`; no reviewer |
 | Resolver missing or not executable | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `RESOLVER_UNAVAILABLE`; no reviewer |
-| `MODEL_DETECTION_FAILED`, `MODEL_DETECTION_AMBIGUOUS`, `MODEL_FAMILY_UNKNOWN`, `MODEL_ATTRIBUTION_UNKNOWN`, `UNSAFE_OUTPUT_VALUE`, `MODEL_PARSE_FAILED`, `RUNTIME_ERROR`, other resolver reasons | `REVIEW_BLOCKED_MODEL_RESOLUTION` with that reason; no reviewer |
-| End checkpoint fails (review required) | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `END_CHECKPOINT_FAILED`; no reviewer |
-| Start checkpoint fails | No delegation (setup failure), except the trivial non-control-plane case above |
+| Helper not found by the lookup rule | `REVIEW_ROUTE_HELPER_UNAVAILABLE`; no delegation (before start) or no reviewer (after) |
+| End checkpoint fails (any review decision) | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `END_CHECKPOINT_FAILED`; no reviewer; never continues to completion |
+| Start checkpoint fails (any task) | No delegation; `Review/runtime setup: blocked`, reason `START_CHECKPOINT_FAILED` |
 
-Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
+Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Review/runtime setup` (only when blocked before delegation), `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
 
 **Limitations (accepted, no heuristic fallback):**
 
@@ -124,9 +139,9 @@ Expected flow:
 
 1. orchestrator inspects repository state;
 2. selects `economy`;
-3. captures the start checkpoint and launches `economy` as a child session;
+3. captures the start checkpoint (if that fails, nothing is delegated, even for a docs-only task) and launches `economy` as a child session;
 4. child edits only the bounded target;
 5. child validates and commits;
-6. child returns a handoff; orchestrator captures the end checkpoint;
+6. child returns a handoff; orchestrator captures the end checkpoint (a failure here also stops, blocked);
 7. a docs-only sentence change is typically not review-worthy, so the orchestrator reports `Model resolution: skipped (independent review not required)` and stops;
 8. no push, merge, or deploy.

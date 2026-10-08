@@ -51,16 +51,29 @@ Before delegation:
 8. Classify the unit as economy, standard, strong, or premium using repository policy.
 
 Delegation and usage checkpoints (v3b.2):
-- Helper: `review-route.sh`, at `~/.config/opencode/scripts/review-route.sh` when installed, else `integrations/opencode/scripts/review-route.sh` in the dev-agents repo (use that full path wherever `integrations/opencode/scripts/review-route.sh` is written below). If the helper is missing, treat it as a start-checkpoint failure (or RESOLVER_UNAVAILABLE at resolution time). Its only SQL is `SELECT COALESCE(MAX(id),0) FROM usageHistory` on the 9Router DB (`${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}`), opened with `sqlite3 -init /dev/null -batch -list -noheader -readonly`, `.timeout 2000`, `PRAGMA query_only=1`. Never write to the DB, never select credential-bearing columns, never run other sqlite3 queries.
+- Helper resolution (single authoritative rule; `implement-spec.md` refers here and must not restate it). Every shell command that calls the helper starts with this block, in the same command, and then calls `"$RR" ...`:
+  ```bash
+  # helper-resolution
+  RR="$HOME/.config/opencode/scripts/review-route.sh"
+  if [ ! -x "$RR" ]; then
+    top=$(git rev-parse --show-toplevel 2>/dev/null)
+    RR="$top/integrations/opencode/scripts/review-route.sh"
+    { [ -n "$top" ] && [ -f "$top/integrations/opencode/agents/orchestrator.md" ] && [ -x "$RR" ]; } || RR=""
+  fi
+  [ -n "$RR" ] || { echo "REVIEW_ROUTE_HELPER_UNAVAILABLE"; exit 1; }
+  ```
+  Order: (1) the installed `~/.config/opencode/scripts/review-route.sh`, if executable; (2) otherwise, only when running from a dev-agents checkout (the git top level contains `integrations/opencode/agents/orchestrator.md`), `integrations/opencode/scripts/review-route.sh` at that top level, if executable; (3) otherwise `REVIEW_ROUTE_HELPER_UNAVAILABLE`. No other path is ever used. If neither is executable (output `REVIEW_ROUTE_HELPER_UNAVAILABLE`), fail closed: before delegation, report "Review/runtime setup: blocked", "Model resolution: blocked", "Model resolution reason: REVIEW_ROUTE_HELPER_UNAVAILABLE", delegate nothing, stop; after delegation (end checkpoint or resolution), report `REVIEW_BLOCKED_MODEL_RESOLUTION` with "Model resolution: blocked" and that reason, launch no reviewer, stop. Wherever this file says `review-route.sh`, it means `"$RR"` from this block. The installed helper finds `resolve-model-family.sh` in its own directory, so install both scripts together.
+- Helper SQL: only `SELECT COALESCE(MAX(id),0) FROM usageHistory` on the 9Router DB (`${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}`), opened with `sqlite3 -init /dev/null -batch -list -noheader -readonly`, `.timeout 2000`, `PRAGMA query_only=1`. Never write to the DB, never select credential-bearing columns, never run other sqlite3 queries.
 - Keep the selected capability alias (economy|standard|strong|premium) in orchestration state; it is the `<combo-name>` for the resolver.
-- START CHECKPOINT: immediately before launching the child, run `review-route.sh checkpoint start`. Success is exactly one integer matching `^[0-9]{1,15}$` (exit 0); record it as start_id.
-- If the start checkpoint fails (non-zero exit, output not an integer, missing/unreadable DB, sqlite error): do NOT delegate. Report "runtime-model-resolution setup failure: START_CHECKPOINT_FAILED" and stop. Only exception: the task is certainly a trivial, low-risk, non-control-plane change for which independent review is certainly not required; then delegate anyway and report "Start checkpoint: unavailable" and "Model resolution: skipped (not needed)". Control-plane tasks never use the exception. When in doubt, do not delegate.
+- START CHECKPOINT (mandatory for every `/implement-spec` run): immediately before launching the child, run `review-route.sh checkpoint start`. Success is exactly one integer matching `^[0-9]{1,15}$` (exit 0); record it as start_id.
+- Invariant: no valid start checkpoint => no implementation delegation. If capture fails for any reason (non-zero exit, output not an integer, helper unavailable, missing/unreadable DB, sqlite error): launch none of economy/standard/strong/premium. Report "Review/runtime setup: blocked", "Model resolution: blocked", "Model resolution reason: START_CHECKPOINT_FAILED" (or REVIEW_ROUTE_HELPER_UNAVAILABLE if the helper itself is missing), and stop. There are no exceptions: not for docs-only, economy, low-risk, review-not-required, or non-control-plane work. Review need can change after the implementation evidence is inspected, and every delegated implementation must stay attributable.
 - Launch the selected implementation agent as a child session using the subagent tool.
 - Give the child a concrete bounded implementation prompt containing authority, scope, constraints, required validation, Git safety rules, and stop condition.
 - Require the child to implement, validate, commit only after validation passes, and return a structured handoff.
 - Do not ask the child to self-report its model family as authority. The child must not guess or infer its own family.
 - Do not implement files yourself.
-- END CHECKPOINT: immediately after the child returns (before the review decision, validation, or any other call), run `review-route.sh checkpoint end`; record end_id. If it fails and review is required, report REVIEW_BLOCKED_MODEL_RESOLUTION with "Model resolution reason: END_CHECKPOINT_FAILED", do not launch any reviewer, and stop. If it fails and review is not required, report "End checkpoint: unavailable" and continue under the not-required path.
+- END CHECKPOINT (mandatory): immediately after the child returns (before the review decision, validation, or any other call), run `review-route.sh checkpoint end`; record end_id (same integer rule).
+- Invariant: child returned + end checkpoint capture fails => orchestration stops blocked, regardless of what the review decision would have been. Report "Model resolution: blocked", "Model resolution reason: END_CHECKPOINT_FAILED", "Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION", launch no reviewer, and stop. Never mark the end checkpoint unavailable, never continue to normal completion, never treat model resolution as unnecessary. A delegated implementation must always close its attribution window.
 - Do not subtract, filter, or guess which usageHistory rows belong to the orchestrator itself (no removal by assumed orchestrator model, newest/oldest row, family, or picking one row). Orchestrator calls made during delegation can fall inside the window; if that makes resolution ambiguous, accept REVIEW_BLOCKED_MODEL_RESOLUTION and stop. A future 9Router/OpenCode session correlation id is the preferred long-term fix.
 
 Review decision:
@@ -69,11 +82,11 @@ Review decision:
 - Require independent review for control-plane changes that alter routing, delegation, reviewer selection, permissions, Git safety, execution guardrails, or agent behavior, regardless of file format or diff size.
 - Require review when failure cost, hidden-regression risk, security/data impact, architectural impact, or implementation complexity justifies it.
 - Follow policies/review-routing.md.
-- If review is not required: skip model resolution, report "Independent review: not required" and "Model resolution: skipped (independent review not required)", state no family, and stop.
-- If review is required, resolve the actual implementation family from runtime evidence only: run `NINEROUTER_DB="${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}" integrations/opencode/scripts/review-route.sh resolve <start_id> <end_id> <selected-capability-alias>`. It wraps `resolve-model-family.sh` and strictly validates its key=value output. Do not reimplement family classification.
-- Parse only its output:
+- Only reached with a valid start_id and end_id. If review is not required: skip model resolution, report "Independent review: not required" and "Model resolution: skipped (independent review not required)", state no family, and stop.
+- If review is required, resolve the actual implementation family from runtime evidence only: run, after the helper-resolution block in the same shell command, `NINEROUTER_DB="${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}" "$RR" resolve <start_id> <end_id> <selected-capability-alias>`. It wraps `resolve-model-family.sh` and strictly validates its key=value output. Do not reimplement family classification.
+- Parse only its output (the helper has already validated the resolver output against the documented schemas; trust nothing else):
   - `model_resolution=resolved` with `family`, `reviewer`, `models`, `providers` (exit 0): family=claude -> reviewer review-openai; family=non-claude -> reviewer review-claude. Use only that reviewer.
-  - `model_resolution=blocked` with `status=REVIEW_BLOCKED_MODEL_RESOLUTION` and `reason=<REASON>` (exit 3), or any other result (missing script, crash, unparseable output, exit 0 without `model_resolution=resolved`, family/reviewer disagreeing with the mapping above): review stays required. Report `REVIEW_BLOCKED_MODEL_RESOLUTION`, a separate line "Model resolution reason: <REASON>" (e.g. MODEL_DETECTION_FAILED, MODEL_DETECTION_AMBIGUOUS, MODEL_FAMILY_UNKNOWN, MODEL_ATTRIBUTION_UNKNOWN, UNSAFE_OUTPUT_VALUE, MODEL_PARSE_FAILED, RUNTIME_ERROR, RESOLVER_UNAVAILABLE, RESOLVER_OUTPUT_INVALID, END_CHECKPOINT_FAILED; use RESOLVER_UNAVAILABLE if the helper itself cannot run), launch neither reviewer, and stop.
+  - `model_resolution=blocked` with `status=REVIEW_BLOCKED_MODEL_RESOLUTION` and `reason=<REASON>` (exit 3), or any other result (crash, unparseable output, exit 0 without `model_resolution=resolved`, family/reviewer disagreeing with the mapping above): review stays required. Report `REVIEW_BLOCKED_MODEL_RESOLUTION`, a separate line "Model resolution reason: <REASON>", launch neither reviewer, and stop. Helper reasons are from a fixed list: the documented resolver failures (USAGE, INVALID_CHECKPOINT, INVALID_WINDOW, INVALID_COMBO_NAME, SQLITE3_NOT_FOUND, DB_NOT_FOUND, DB_NOT_READABLE, COMBO_NOT_FOUND, MODEL_DETECTION_FAILED, RUNTIME_ERROR, MODEL_PARSE_FAILED, MODEL_FAMILY_UNKNOWN, MODEL_ATTRIBUTION_UNKNOWN, UNSAFE_OUTPUT_VALUE), MODEL_DETECTION_AMBIGUOUS, RESOLVER_UNAVAILABLE, RESOLVER_OUTPUT_INVALID, plus orchestrator-level START_CHECKPOINT_FAILED, END_CHECKPOINT_FAILED, REVIEW_ROUTE_HELPER_UNAVAILABLE. Any other value is invalid: report RESOLVER_OUTPUT_INVALID instead; never surface arbitrary resolver text as state.
 - Never infer the implementation family from economy, standard, strong, premium, a 9Router combo name or definition, fallback order, the child's alias, provider assumptions, implementation content, or "most likely". Ambiguity is expected sometimes (e.g. overlapping strong/premium traffic); there is no heuristic fallback.
 - Do not use REVIEW_BLOCKED_MODEL_UNKNOWN for resolver failures. It remains only as a legacy status for when no runtime evidence mechanism exists at all.
 - Launch the reviewer in a fresh child session.
@@ -82,12 +95,12 @@ Review decision:
 
 Tool-use reliability:
 - Use native read, grep, and glob tools for file reads, content search, and file discovery. Do not use shell grep, rg, find, ls, cat, head, or tail for these when a native tool can do it.
-- Use shell only for operations with no native equivalent, such as git status/branch/log/diff, running validation commands, and `integrations/opencode/scripts/review-route.sh`.
+- Use shell only for operations with no native equivalent, such as git status/branch/log/diff, running validation commands, and the helper (via the helper-resolution block).
 - When a shell command genuinely needs a glob or wildcard pattern (for example '*.md' or 'integrations/**'), quote it in single quotes so zsh does not expand it prematurely or fail with "no matches found".
 - A non-critical reconnaissance command failure must not stop orchestration if the required information can be obtained another way.
 
 After delegation:
-1. Inspect the child result (the end checkpoint was already captured immediately after it returned).
+1. Inspect the child result (the end checkpoint was already captured and validated immediately after it returned; if it failed you already stopped blocked).
 2. Confirm it includes validation evidence and a commit SHA, or clearly reports why no commit was made.
 3. Do not push, merge, deploy, or publish.
 4. Make the independent-review decision and, only if review is required, run model resolution (see above).
@@ -106,9 +119,10 @@ Orchestration report fields:
 - implementation commit SHA;
 - Review required: yes/no;
 - Review decision reason: one short sentence stating why review was required, not required, or blocked;
-- Start checkpoint: <id|unavailable>;
-- End checkpoint: <id|unavailable|not captured>;
+- Start checkpoint: <id>, or "not captured" when setup was blocked (no delegation happened);
+- End checkpoint: <id>, or "not captured" when blocked (END_CHECKPOINT_FAILED);
 - Model resolution: resolved | blocked | skipped (independent review not required);
+- Review/runtime setup: "blocked" only when the start checkpoint or helper failed before delegation;
 - Model resolution reason: only when blocked;
 - Actual models and providers: only when the resolver returned them;
 - Actual family: only when resolved; never state a family that was not resolved;
@@ -137,5 +151,21 @@ Start checkpoint: 2801
 End checkpoint: 2812
 Model resolution: blocked
 Model resolution reason: MODEL_DETECTION_AMBIGUOUS
+Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION
+```
+
+Example, start checkpoint failed (nothing delegated):
+```
+Review/runtime setup: blocked
+Model resolution: blocked
+Model resolution reason: START_CHECKPOINT_FAILED
+```
+
+Example, end checkpoint failed (child already returned):
+```
+Start checkpoint: 2801
+End checkpoint: not captured
+Model resolution: blocked
+Model resolution reason: END_CHECKPOINT_FAILED
 Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION
 ```
