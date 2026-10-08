@@ -1,5 +1,5 @@
 ---
-description: Route and automatically delegate one bounded implementation unit, then stop after the implementation handoff.
+description: Route and delegate one bounded implementation unit, then perform independent review when required.
 agent: orchestrator
 subagent: false
 ---
@@ -26,6 +26,24 @@ Execute the v2 implementation workflow:
    - add no AI co-author metadata;
    - never push, merge, deploy, force-push, rewrite shared history, or bypass protections;
    - return a structured implementation handoff with files changed, validation evidence, commit SHA, unresolved risks, and actual model/model family if observable.
-10. Inspect the returned handoff and summarize it.
-11. Do not run independent review automatically in v2.
-12. Stop after the implementation handoff.
+10. Inspect the returned implementation handoff.
+11. Decide whether independent review is required using policies/review-routing.md and the risk/complexity of the implemented change.
+12. If review is not required:
+    - report "Independent review: not required";
+    - summarize the implementation handoff;
+    - stop.
+13. If review is required:
+    - determine the actual implementation model family only from reliable runtime metadata or the implementation handoff;
+    - never infer it from the capability tier, 9Router combo name, or fallback ordering.
+14. If the actual family is unknown:
+    - report `REVIEW_BLOCKED_MODEL_UNKNOWN`;
+    - explain that independent review is required but opposite-family routing cannot be selected safely;
+    - stop without guessing.
+15. If the actual family is known:
+    - Claude -> delegate to `review-openai`;
+    - non-Claude -> delegate to `review-claude`;
+    - use a fresh reviewer child session;
+    - require read-only review against the authoritative SPEC/task, repository instructions, committed diff, validation evidence, acceptance criteria, regressions, and relevant security/data boundaries;
+    - require exactly one verdict: PASS, PASS_WITH_NOTES, or CHANGES_REQUIRED.
+16. Report the reviewer, verdict, findings, and implementation commit.
+17. Do not automatically fix CHANGES_REQUIRED in v3a. Stop after the first review verdict.
