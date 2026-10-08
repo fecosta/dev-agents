@@ -70,6 +70,11 @@ Review decision:
 - The reviewer must be read-only and return PASS, PASS_WITH_NOTES, or CHANGES_REQUIRED.
 - In v3a, do not automatically remediate CHANGES_REQUIRED.
 
+Tool-use reliability:
+- Prefer native read, grep, glob, and repository tools over shell equivalents when available.
+- When shell glob patterns are required, always quote them so zsh does not expand them prematurely.
+- A non-critical reconnaissance command failure must not stop orchestration if the required information can be obtained another way.
+
 After delegation:
 1. Inspect the child result.
 2. Confirm it includes validation evidence and a commit SHA, or clearly reports why no commit was made.

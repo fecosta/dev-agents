@@ -6,7 +6,7 @@ subagent: false
 
 Work on SPEC/task: $ARGUMENTS
 
-Execute the v2 implementation workflow:
+Execute the v3a implementation and conditional review workflow:
 
 1. Read project-local AGENTS.md and relevant repository instructions.
 2. Locate and read the authoritative SPEC/task and relevant architecture/security/data/ADR context.
