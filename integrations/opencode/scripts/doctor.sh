@@ -263,8 +263,10 @@ else
     def mode($n): agent($n) | if type == "object" then (.mode // "") else "" end
       | if IN("all", "subagent", "primary") then . else "other" end;
     def m9($n): agent($n) | if type == "object" then
-        (.model | if type == "string" then startswith("9router/")
-                  elif type == "object" then ((.providerID // "") == "9router") else false end)
+        (.model as $m | if ($m | type) == "string" then ($m | startswith("9router/") and length > 8)
+                        elif ($m | type) == "object" then
+                          ($m.providerID == "9router" and ($m.model | type) == "string" and ($m.model | length) > 0)
+                        else false end)
       else false end;
     if type != "object" then "invalid"
     else ("economy","standard","strong","premium","review-openai","review-claude","explorer") as $n
@@ -390,15 +392,60 @@ INSERT INTO usageHistory (id,timestamp,provider,model,status) VALUES (2,'t','cla
   fi
 fi
 
+# Strict validator for the resolver's "resolved" output, mirroring review-route.sh's resolved
+# schema (it deliberately does NOT call the installed review-route.sh, so a lax helper cannot
+# make the smoke look healthy). <file> holds the raw stdout capture (a file, not command
+# substitution, so trailing-newline/blank-line framing is preserved). Sets SMOKE_WHY to a fixed
+# reason string (never resolver text). Framing: one key=value per line, no blank lines, no CRLF,
+# a missing final newline is accepted.
+smoke_valid() { # <file> <rc> <combo> <family> <reviewer>
+  local f="$1" rc="$2" combo="$3" fam="$4" rev="$5"
+  local status="" c="" window="" family="" reviewer="" models="" providers="" usage_ids=""
+  local seen=" " line key val keyset
+  local list_re='^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$' ids_re='^[0-9]+(,[0-9]+)*$'
+  SMOKE_WHY=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || { SMOKE_WHY="blank line"; return 1; }
+    [[ "$line" =~ ^([a-z_]+)=([A-Za-z0-9._,-]*)$ ]] || { SMOKE_WHY="malformed line"; return 1; }
+    key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+    case "$seen" in *" $key "*) SMOKE_WHY="duplicate key"; return 1 ;; esac
+    seen="$seen$key "
+    case "$key" in
+      status) status="$val" ;;
+      combo) c="$val" ;;
+      window) window="$val" ;;
+      family) family="$val" ;;
+      reviewer) reviewer="$val" ;;
+      models) models="$val" ;;
+      providers) providers="$val" ;;
+      usage_ids) usage_ids="$val" ;;
+      *) SMOKE_WHY="unexpected key"; return 1 ;;
+    esac
+  done <"$f"
+  keyset=$(printf '%s\n' $seen | sort | paste -sd, -)
+  [ "$rc" -eq 0 ] || { SMOKE_WHY="exit code $rc"; return 1; }
+  [ "$keyset" = "combo,family,models,providers,reviewer,status,usage_ids,window" ] || { SMOKE_WHY="key set mismatch"; return 1; }
+  [ "$status" = resolved ] || { SMOKE_WHY="status not resolved"; return 1; }
+  [ "$c" = "$combo" ] || { SMOKE_WHY="combo mismatch"; return 1; }
+  [ "$window" = "0-2" ] || { SMOKE_WHY="window mismatch"; return 1; }
+  [[ "$models" =~ $list_re && "$providers" =~ $list_re ]] || { SMOKE_WHY="models/providers invalid"; return 1; }
+  [[ "$usage_ids" =~ $ids_re ]] || { SMOKE_WHY="usage_ids invalid"; return 1; }
+  case "$family/$reviewer" in
+    claude/review-openai | non-claude/review-claude) ;;
+    *) SMOKE_WHY="family/reviewer contradictory"; return 1 ;;
+  esac
+  [ "$family" = "$fam" ] && [ "$reviewer" = "$rev" ] || { SMOKE_WHY="unexpected family/reviewer"; return 1; }
+  return 0
+}
+
 resolver_smoke() { # <check-name> <combo> <family> <reviewer>
-  local name="$1" combo="$2" fam="$3" rev="$4" out rc
+  local name="$1" combo="$2" fam="$3" rev="$4" rc
   if [ "$RES_OK" = 0 ] || [ "$FIX_OK" = 0 ]; then notchecked "$name" "resolver or fixture DB unavailable"; return 0; fi
-  out=$(NINEROUTER_DB="$FIXDB" "$RESOLVER" 0 2 "$combo" 2>/dev/null </dev/null); rc=$?
-  if [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -qx "status=resolved" &&
-    printf '%s\n' "$out" | grep -qx "family=$fam" && printf '%s\n' "$out" | grep -qx "reviewer=$rev"; then
+  NINEROUTER_DB="$FIXDB" "$RESOLVER" 0 2 "$combo" >"$TMP/smoke.out" 2>/dev/null </dev/null; rc=$?
+  if smoke_valid "$TMP/smoke.out" "$rc" "$combo" "$fam" "$rev"; then
     check "$name" pass "fixture resolved family=$fam reviewer=$rev"
   else
-    check "$name" fail "fixture did not resolve to family=$fam reviewer=$rev (rc=$rc)" "reinstall resolver: $(cp_hint scripts/resolve-model-family.sh)"
+    check "$name" fail "fixture resolver output invalid ($SMOKE_WHY; rc=$rc; want family=$fam reviewer=$rev)" "reinstall resolver: $(cp_hint scripts/resolve-model-family.sh)"
   fi
 }
 resolver_smoke resolver_smoke_non_claude doctor-non-claude non-claude review-claude
