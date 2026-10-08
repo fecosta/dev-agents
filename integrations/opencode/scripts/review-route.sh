@@ -29,6 +29,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVER="${DEV_AGENTS_RESOLVER:-$HERE/resolve-model-family.sh}"
 INT_RE='^[0-9]{1,15}$'
 
+# Global temp path for resolver stdout capture; cleaned by EXIT trap.
+RESOLVE_TMP=""
+trap '[[ -n "${RESOLVE_TMP:-}" ]] && rm -f "$RESOLVE_TMP"; true' EXIT
+
 blocked() {
   echo "model_resolution=blocked"
   echo "status=REVIEW_BLOCKED_MODEL_RESOLUTION"
@@ -60,11 +64,10 @@ resolve() {
   [[ $((10#$end)) -ge $((10#$start)) ]] || blocked INVALID_WINDOW
   [[ -x "$RESOLVER" && -f "$RESOLVER" ]] || blocked RESOLVER_UNAVAILABLE
 
-  local tmp rc
-  tmp=$(mktemp) || blocked RESOLVER_OUTPUT_INVALID
-  trap 'rm -f "$tmp"' EXIT
+  local rc
+  RESOLVE_TMP=$(mktemp "${TMPDIR:-/tmp}/review-route.XXXXXX") || blocked RESOLVER_OUTPUT_INVALID
 
-  "$RESOLVER" "$start" "$end" "$alias" >"$tmp" 2>/dev/null
+  "$RESOLVER" "$start" "$end" "$alias" >"$RESOLVE_TMP" 2>/dev/null
   rc=$?
 
   # Strict parse: only key=value lines, known keys, no duplicates, safe characters.
@@ -91,7 +94,7 @@ resolve() {
       reason) reason="$val" ;;
       *) blocked RESOLVER_OUTPUT_INVALID ;;
     esac
-  done < "$tmp"
+  done < "$RESOLVE_TMP"
 
   # Exact key set (duplicates were already rejected, so a sorted comparison is exact).
   local keyset want

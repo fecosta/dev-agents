@@ -32,6 +32,11 @@ stub() { # stub <name> <stdout> <exit>
 route() { # route <resolver> -> sets out, rc
   out=$(NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$1" "$RR" resolve 3 5 strong 2>/dev/null); rc=$?
 }
+route_err() { # route_err <resolver> -> sets out, err, rc
+  local efile="$TMP/route_err_$$"
+  out=$(NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$1" "$RR" resolve 3 5 strong 2>"$efile"); rc=$?
+  err=$(cat "$efile"); rm -f "$efile"
+}
 RES_OK='status=resolved\ncombo=strong\nwindow=3-5\nfamily=%s\nreviewer=%s\nmodels=m1\nproviders=p1\nusage_ids=4,5\n'
 
 # --- A: review not required => resolution skipped, no reviewer (instruction contract)
@@ -60,12 +65,15 @@ blocked_case() { # id reason stdout exit
   has_line "$1 reason" "reason=$2"
   case "$out" in *reviewer=*|*family=*) bad "$1 leaked reviewer/family" ;; *) ok "$1 no reviewer/family" ;; esac
 }
-# leak_check <id> <resolver> <expected_rc>: assert no mktemp file remains after the call
+# leak_check <id> <resolver> <expected_rc>: assert TMPDIR is honored and the temp file is removed
+# on both success and blocked exit paths, and that stderr is empty.
 check_no_leak() {
-  local ldir="$TMP/leak_$1"
+  local ldir="$TMP/leak_$1" efile="$TMP/leak_err_$1"
   mkdir -p "$ldir"
-  out=$(TMPDIR="$ldir" NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$2" "$RR" resolve 3 5 strong 2>/dev/null); rc=$?
+  out=$(TMPDIR="$ldir" NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$2" "$RR" resolve 3 5 strong 2>"$efile"); rc=$?
+  err=$(cat "$efile"); rm -f "$efile"
   eq "$1 rc" "$rc" "$3"
+  [[ -z "$err" ]] && ok "$1 stderr empty" || bad "$1 stderr not empty: $err"
   if [[ -n $(find "$ldir" -mindepth 1 -print -quit) ]]; then bad "$1 temp file leaked"; else ok "$1 no temp leak"; fi
 }
 # resolved_out <family> <reviewer> [extra "k=v\n" to append]; build one valid resolved body
@@ -174,6 +182,10 @@ blocked_case FR10 RESOLVER_OUTPUT_INVALID 'status=failed\nreason=MODEL_FAMILY_UN
 # temp-file cleanup on success and on blocked exit
 check_no_leak FR11 "$(stub s_frok "$(res claude review-openai)" 0)" 0
 check_no_leak FR12 "$(stub s_frbad 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n\n' 0)" 3
+# positive stderr check on a normal success path (no TMPDIR override)
+route_err "$(stub s_frok_stderr "$(res claude review-openai)" 0)"
+eq FR13 "$rc" 0
+[[ -z "$err" ]] && ok "FR13 stderr empty" || bad "FR13 stderr not empty: $err"
 
 # 16: family/reviewer mismatch => fail closed
 blocked_case G1 RESOLVER_OUTPUT_INVALID "$(res claude review-claude)" 0
