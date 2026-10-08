@@ -33,6 +33,33 @@ cp integrations/opencode/commands/*.md ~/.config/opencode/commands/
 
 OpenCode reloads command and agent files automatically, but using a fresh session is recommended for the first delegation test.
 
+## 9Router runtime model resolver (v3b.1)
+
+`integrations/opencode/scripts/resolve-model-family.sh` resolves the model family actually used by an OpenCode child session from 9Router's local SQLite usage store.
+
+**Usage:**
+
+```bash
+NINEROUTER_DB=/path/to/data.sqlite ./integrations/opencode/scripts/resolve-model-family.sh <checkpoint-id> <combo-name>
+```
+
+- Default DB path: `~/.9router/db/data.sqlite`; override with `NINEROUTER_DB`.
+- `checkpoint-id`: max `usageHistory.id` captured immediately before delegating to the child session.
+- `combo-name`: OpenCode combo (e.g. `economy`, `standard`, `strong`, `premium`).
+
+**Output contract (key=value, one per line):**
+
+- `status=resolved family=claude reviewer=review-openai ...` when all matching rows are Claude models.
+- `status=resolved family=non-claude reviewer=review-claude ...` when all matching rows are non-Claude models.
+- `status=failed reason=<CODE>` for no combo, no matching rows, invalid args, DB errors, etc.
+- `status=ambiguous reason=MODEL_DETECTION_AMBIGUOUS ...` when rows contain both Claude and non-Claude models.
+
+The resolver is strictly read-only: it opens SQLite with `-readonly` and `PRAGMA query_only=1`, issues only `SELECT` statements, and never reads credential-bearing columns such as `apiKey`, `meta`, `connectionId`, `tokens`, or `endpoint`.
+
+**Known limitation:** usage rows from unrelated concurrent sessions that happen to use the same combo models after the checkpoint cannot be distinguished. Capture a fresh checkpoint right before delegation to minimize this.
+
+**v3b.1 scope:** this is a standalone resolver and test harness only. It does not change the orchestrator, commands, policies, or any automatic reviewer routing — integration comes later.
+
 ## First test
 
 Use a harmless docs-only task in a clean or understood working tree:
