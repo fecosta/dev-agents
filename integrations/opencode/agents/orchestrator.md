@@ -71,8 +71,9 @@ Review decision:
 - In v3a, do not automatically remediate CHANGES_REQUIRED.
 
 Tool-use reliability:
-- Prefer native read, grep, glob, and repository tools over shell equivalents when available.
-- When shell glob patterns are required, always quote them so zsh does not expand them prematurely.
+- Use native read, grep, and glob tools for file reads, content search, and file discovery. Do not use shell grep, rg, find, ls, cat, head, or tail for these when a native tool can do it.
+- Use shell only for operations with no native equivalent, such as git status/branch/log/diff and running validation commands.
+- When a shell command genuinely needs a glob or wildcard pattern (for example '*.md' or 'integrations/**'), quote it in single quotes so zsh does not expand it prematurely or fail with "no matches found".
 - A non-critical reconnaissance command failure must not stop orchestration if the required information can be obtained another way.
 
 After delegation:
