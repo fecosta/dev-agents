@@ -59,6 +59,7 @@ Delegation:
 Review decision:
 - After a successful implementation handoff, decide whether independent review is required.
 - Do not require independent review mechanically for trivial, low-risk, easily verified changes.
+- Require independent review for control-plane changes that alter routing, delegation, reviewer selection, permissions, Git safety, execution guardrails, or agent behavior, regardless of file format or diff size.
 - Require review when failure cost, hidden-regression risk, security/data impact, architectural impact, or implementation complexity justifies it.
 - Follow policies/review-routing.md.
 - If review is required, use the actual implementation model family when reliably observable:
