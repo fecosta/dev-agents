@@ -1,37 +1,46 @@
 #!/usr/bin/env bash
 # resolve-model-family.sh — read-only 9Router runtime model resolver for OpenCode child sessions.
-# Usage: resolve-model-family.sh <checkpoint-id> <combo-name>
+# Usage: resolve-model-family.sh <start-id> <end-id> <combo-name>
 #
 # Resolves the model family (claude vs non-claude) actually used in usageHistory
-# rows after the given checkpoint for a named combo, then maps to the opposite-family
-# reviewer per policies/review-routing.md.
+# rows with start-id < id <= end-id for a named combo, then maps to the
+# opposite-family reviewer per policies/review-routing.md.
 #
-# Exit codes:
-#   0  resolved (all claude or all non-claude)
-#   1  generic / usage error
-#   2  USAGE / validation error
-#   3  combo not found
-#   4  model detection failed (no matching ok rows)
-#   5  model detection ambiguous (mixed families)
-#   6  runtime / sqlite error
+# Output: key=value lines on stdout. Every emitted provider/model value is
+# validated against [A-Za-z0-9._-]+; the combo name is only echoed after the same
+# validation. Failures are always status=failed|ambiguous plus a reason, exit != 0.
 #
-# ponytail: This resolver cannot distinguish usage rows from unrelated concurrent
-# sessions that happen to use the same combo models after the checkpoint. The caller
-# should capture a fresh checkpoint immediately before delegating to the child session.
-# Upgrade path: scope rows by a session/correlation id once 9Router records one.
+# Exit codes / reasons:
+#   0  resolved (all rows claude, or all rows non-claude)
+#   2  USAGE | INVALID_CHECKPOINT | INVALID_WINDOW | INVALID_COMBO_NAME |
+#      SQLITE3_NOT_FOUND | DB_NOT_FOUND | DB_NOT_READABLE
+#   3  COMBO_NOT_FOUND
+#   4  MODEL_DETECTION_FAILED   (no matching ok rows in window)
+#   5  MODEL_DETECTION_AMBIGUOUS (status=ambiguous; both families in window)
+#   6  RUNTIME_ERROR (sqlite/schema/query failure) | MODEL_PARSE_FAILED
+#   7  MODEL_FAMILY_UNKNOWN     (row is neither Claude nor allowlisted non-Claude)
+#   8  MODEL_ATTRIBUTION_UNKNOWN (row model matches a candidate but not its route's provider)
+#   9  UNSAFE_OUTPUT_VALUE
+#
+# Window: the caller (v3b.2) must capture start-id immediately BEFORE child
+# delegation and end-id immediately AFTER child completion, so later orchestrator
+# traffic is outside the window.
+#
+# ponytail: usageHistory has no session/correlation column, so unrelated concurrent
+# traffic INSIDE the window cannot be told apart. It fails closed when attribution is
+# not exact or families mix, but same-provider/same-model traffic is indistinguishable.
+# Upgrade path: scope rows by a correlation id once 9Router records one.
+#
+# Read-only: sqlite3 -readonly + PRAGMA query_only=1, SELECT only. Reads only
+# combos.name/models and usageHistory.id/provider/model/status. No JSON1 needed.
 
 set -euo pipefail
+export LC_ALL=C
 
 readonly DB_PATH="${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}"
-
-# --- validation ---------------------------------------------------------------
-
-usage_error() {
-  echo "status=failed"
-  echo "reason=USAGE"
-  echo "usage=resolve-model-family.sh <checkpoint-id> <combo-name>" >&2
-  exit 2
-}
+readonly SAFE_RE='^[A-Za-z0-9._-]+$'
+readonly ENTRY_RE='^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+readonly ARRAY_RE='^\[[[:space:]]*("[A-Za-z0-9._/-]*"[[:space:]]*(,[[:space:]]*"[A-Za-z0-9._/-]*"[[:space:]]*)*)?\]$'
 
 fail() {
   local code="$1" reason="$2"
@@ -40,132 +49,121 @@ fail() {
   exit "$code"
 }
 
-if [[ $# -ne 2 ]]; then
-  usage_error
-fi
-
-readonly checkpoint_raw="$1"
-readonly combo="$2"
-
-if [[ -z "$checkpoint_raw" || "$checkpoint_raw" =~ [^0-9] ]]; then
-  echo "status=failed"
-  echo "reason=INVALID_CHECKPOINT"
-  echo "Invalid checkpoint-id: must be a non-negative integer" >&2
-  exit 2
-fi
-readonly checkpoint="$checkpoint_raw"
-
-if [[ -z "$combo" || ! "$combo" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "status=failed"
-  echo "combo=$combo"
-  echo "reason=INVALID_COMBO_NAME"
-  echo "Invalid combo-name: must match [A-Za-z0-9._-]+" >&2
-  exit 2
-fi
-
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  echo "status=failed"
-  echo "reason=SQLITE3_NOT_FOUND"
-  echo "sqlite3 not found on PATH" >&2
-  exit 2
-fi
-
-if [[ ! -e "$DB_PATH" ]]; then
-  echo "status=failed"
-  echo "reason=DB_NOT_FOUND"
-  echo "Database not found: $DB_PATH" >&2
-  exit 2
-fi
-
-if [[ ! -r "$DB_PATH" ]]; then
-  echo "status=failed"
-  echo "reason=DB_NOT_READABLE"
-  echo "Database not readable: $DB_PATH" >&2
-  exit 2
-fi
-
-# --- helpers ------------------------------------------------------------------
-
-# Quote a string for safe inclusion in a single-quoted SQL literal.
-sql_quote() {
-  printf "%s" "$1" | sed "s/'/''/g"
+# Route prefix -> runtime provider glob (lowercase). Empty output = unmapped.
+# Evidence (live 9Router DB, read-only, usageHistory.provider/model vs combos.models):
+#   cc    -> provider "claude"       (cc/claude-sonnet-5-5 rows: claude|claude-sonnet-5-5)
+#   cx    -> provider "codex"        (cx/gpt-5.6-sol rows: codex|gpt-5.6-sol)
+#   ocg   -> provider "opencode-go"  (ocg/kimi-k2.7-code rows: opencode-go|kimi-k2.7-code)
+#   dmas  -> "anthropic-compatible-<uuid>"      (only claude-* rows with that provider type)
+#   oc-dmas -> "openai-compatible-responses-<uuid>" (only gpt-* rows with that provider type)
+# The compatible-node uuid is dynamic and not derivable from the allowed columns, so
+# dmas/oc-dmas match on the provider-type prefix only. Unknown prefixes stay unmapped
+# and fail closed.
+provider_glob() {
+  case "$1" in
+    cc) echo "claude" ;;
+    cx) echo "codex" ;;
+    ocg) echo "opencode-go" ;;
+    dmas) echo "anthropic-compatible-*" ;;
+    oc-dmas) echo "openai-compatible-responses-*" ;;
+    *) echo "" ;;
+  esac
 }
 
-# Test whether sqlite3 supports JSON1 (json_each).
-has_json1() {
-  sqlite3 -readonly "$DB_PATH" "SELECT value FROM json_each('[\"a\"]') LIMIT 1;" >/dev/null 2>&1
-}
+lc() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 
-# Extract candidate model names (portion after the last '/') from a JSON array of
-# "provider/model" strings. Outputs one model per line.
-parse_candidate_models() {
-  local json="$1"
-  local entries
-  if has_json1; then
-    # JSON1 path: extract the raw provider/model entries.
-    entries=$(sqlite3 -readonly "$DB_PATH" "SELECT value FROM json_each('$(sql_quote "$json")');")
-  else
-    # Fallback path: extract all quoted strings.
-    entries=$(printf '%s' "$json" | grep -oE '"[^"]*"' | tr -d '"')
-  fi
-  # Take the portion after the last '/' for each entry.
-  printf '%s\n' "$entries" | sed 's/.*\///'
-}
+# --- validation ---------------------------------------------------------------
+
+if [[ $# -ne 3 ]]; then
+  echo "usage=resolve-model-family.sh <start-id> <end-id> <combo-name>" >&2
+  fail 2 USAGE
+fi
+
+start_raw="$1"
+end_raw="$2"
+combo="$3"
+
+int_re='^[0-9]{1,15}$'
+if ! [[ "$start_raw" =~ $int_re && "$end_raw" =~ $int_re ]]; then
+  echo "start-id and end-id must be non-negative integers" >&2
+  fail 2 INVALID_CHECKPOINT
+fi
+start=$((10#$start_raw))
+end=$((10#$end_raw))
+if [[ $end -lt $start ]]; then
+  echo "end-id must be >= start-id" >&2
+  fail 2 INVALID_WINDOW
+fi
+
+if ! [[ "$combo" =~ $SAFE_RE ]]; then
+  echo "combo-name must match [A-Za-z0-9._-]+" >&2
+  fail 2 INVALID_COMBO_NAME
+fi
+
+command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 not found on PATH" >&2; fail 2 SQLITE3_NOT_FOUND; }
+[[ -e "$DB_PATH" ]] || { echo "Database not found: $DB_PATH" >&2; fail 2 DB_NOT_FOUND; }
+[[ -r "$DB_PATH" ]] || { echo "Database not readable: $DB_PATH" >&2; fail 2 DB_NOT_READABLE; }
 
 # --- read combo candidates ----------------------------------------------------
 
-combo_models_json=$(sqlite3 -readonly "$DB_PATH" "PRAGMA query_only=1; SELECT models FROM combos WHERE name = '$(sql_quote "$combo")';") || {
-  echo "status=failed"
-  echo "reason=RUNTIME_ERROR"
+combo_json=$(sqlite3 -readonly "$DB_PATH" "PRAGMA query_only=1; SELECT models FROM combos WHERE name = '$combo';" 2>/dev/null) || {
   echo "Failed to query combos table" >&2
-  exit 6
+  fail 6 RUNTIME_ERROR
 }
 
-if [[ -z "$combo_models_json" ]]; then
+if [[ -z "$combo_json" ]]; then
   echo "status=failed"
   echo "combo=$combo"
   echo "reason=COMBO_NOT_FOUND"
   exit 3
 fi
 
-candidate_models=()
-while IFS= read -r line; do
-  [[ -n "$line" ]] && candidate_models+=("$line")
-done < <(parse_candidate_models "$combo_models_json")
-
-if [[ ${#candidate_models[@]} -eq 0 ]]; then
-  echo "status=failed"
-  echo "combo=$combo"
-  echo "reason=MODEL_PARSE_FAILED"
-  echo "Could not parse combo models JSON" >&2
-  exit 6
+# Strict parse: JSON array of "prefix/model" strings with safe characters only.
+# Escapes, nested values, or odd characters fail the whole parse (fail closed).
+if ! [[ "$combo_json" =~ $ARRAY_RE ]]; then
+  echo "Combo models JSON is not a plain array of safe strings" >&2
+  fail 6 MODEL_PARSE_FAILED
 fi
 
-# Build IN clause for candidate models.
+cand_prefix=()
+cand_model=()
 in_clause=""
 sep=""
-for m in "${candidate_models[@]}"; do
-  in_clause="${in_clause}${sep}'$(sql_quote "$m")'"
+while IFS= read -r entry; do
+  entry="${entry//\"/}"
+  if ! [[ "$entry" =~ $ENTRY_RE ]]; then
+    echo "Combo entry is not <prefix>/<model>" >&2
+    fail 6 MODEL_PARSE_FAILED
+  fi
+  m="$(lc "${entry#*/}")"
+  cand_prefix+=("$(lc "${entry%%/*}")")
+  cand_model+=("$m")
+  in_clause="${in_clause}${sep}'${m}'"
   sep=","
-done
+done < <(printf '%s' "$combo_json" | grep -oE '"[^"]*"' || true)
+
+if [[ ${#cand_model[@]} -eq 0 ]]; then
+  echo "Combo has no models" >&2
+  fail 6 MODEL_PARSE_FAILED
+fi
 
 # --- query usageHistory -------------------------------------------------------
 
-# Strictly read-only: -readonly on the CLI plus query_only PRAGMA.
-# Select ONLY id, provider, model — never credential-bearing columns.
-# ponytail: If 9Router later adds a session/correlation column, scope rows by it
-# here to eliminate concurrent-session ambiguity.
+# Select ONLY id, provider, model. The SQL flags values outside the safe charset
+# and blanks them so a hostile value can never split or inject output lines.
+unsafe='GLOB '"'"'*[^A-Za-z0-9._-]*'"'"
 rows=$(sqlite3 -readonly "$DB_PATH" "PRAGMA query_only=1;
-SELECT id, provider, model
+SELECT id,
+  (COALESCE(provider,'') $unsafe OR COALESCE(model,'') $unsafe),
+  CASE WHEN COALESCE(provider,'') $unsafe THEN '' ELSE COALESCE(provider,'') END,
+  CASE WHEN COALESCE(model,'') $unsafe THEN '' ELSE COALESCE(model,'') END
 FROM usageHistory
-WHERE id > $(sql_quote "$checkpoint")
+WHERE id > $start AND id <= $end
   AND status = 'ok'
-  AND model IN ($in_clause)
-ORDER BY id ASC;") || {
-  echo "status=failed"
-  echo "reason=RUNTIME_ERROR"
+  AND lower(model) IN ($in_clause)
+ORDER BY id ASC;" 2>/dev/null) || {
   echo "Failed to query usageHistory table" >&2
-  exit 6
+  fail 6 RUNTIME_ERROR
 }
 
 if [[ -z "$rows" ]]; then
@@ -175,28 +173,65 @@ if [[ -z "$rows" ]]; then
   exit 4
 fi
 
-# --- classify families --------------------------------------------------------
+# --- attribute + classify -----------------------------------------------------
 
-usage_ids=()
-providers=()
-models=()
+ids=""
+providers=""
+models=""
 has_claude=0
 has_non_claude=0
 
-while IFS='|' read -r uh_id uh_provider uh_model; do
-  usage_ids+=("$uh_id")
-  providers+=("$uh_provider")
-  models+=("$uh_model")
-  if [[ "$uh_model" == claude-* ]]; then
-    has_claude=1
-  else
-    has_non_claude=1
+while IFS='|' read -r uh_id uh_unsafe uh_provider uh_model; do
+  if [[ "$uh_unsafe" != "0" || ! "$uh_id" =~ $int_re ]]; then
+    fail 9 UNSAFE_OUTPUT_VALUE
   fi
+  p="$(lc "$uh_provider")"
+  m="$(lc "$uh_model")"
+
+  # Attribution: the row's provider must match the route of a candidate with the
+  # same model. Any same-model candidate with an unmapped prefix, or no
+  # provider match, means exact attribution is impossible -> fail closed.
+  attributed=0
+  unmapped=0
+  i=0
+  while [[ $i -lt ${#cand_model[@]} ]]; do
+    if [[ "${cand_model[$i]}" == "$m" ]]; then
+      g="$(provider_glob "${cand_prefix[$i]}")"
+      if [[ -z "$g" ]]; then
+        unmapped=1
+      elif [[ -n "$p" && "$p" == $g ]]; then
+        attributed=1
+      fi
+    fi
+    i=$((i + 1))
+  done
+  if [[ $unmapped -eq 1 || $attributed -eq 0 ]]; then
+    fail 8 MODEL_ATTRIBUTION_UNKNOWN
+  fi
+
+  # Family: fail closed unless exactly one side matches.
+  is_claude=0
+  is_non=0
+  case "$p/$m" in *claude* | *anthropic*) is_claude=1 ;; esac
+  case "$m" in *gpt* | *codex* | *kimi* | *deepseek* | *glm*) is_non=1 ;; esac
+  if [[ $((is_claude + is_non)) -ne 1 ]]; then
+    fail 7 MODEL_FAMILY_UNKNOWN
+  fi
+  if [[ $is_claude -eq 1 ]]; then has_claude=1; else has_non_claude=1; fi
+
+  # Defense in depth: re-validate every value about to be emitted.
+  if ! [[ "$uh_provider" =~ $SAFE_RE && "$uh_model" =~ $SAFE_RE ]]; then
+    fail 9 UNSAFE_OUTPUT_VALUE
+  fi
+  ids="${ids}${uh_id}"$'\n'
+  providers="${providers}${uh_provider}"$'\n'
+  models="${models}${uh_model}"$'\n'
 done <<< "$rows"
 
-models_csv=$(printf '%s\n' "${models[@]}" | sort -u | paste -sd ',' -)
-providers_csv=$(printf '%s\n' "${providers[@]}" | sort -u | paste -sd ',' -)
-usage_ids_csv=$(printf '%s\n' "${usage_ids[@]}" | sort -n -u | paste -sd ',' -)
+csv() { printf '%s' "$1" | sort "${2:--u}" | paste -sd ',' -; }
+models_csv=$(csv "$models")
+providers_csv=$(csv "$providers")
+ids_csv=$(csv "$ids" -nu)
 
 if [[ $has_claude -eq 1 && $has_non_claude -eq 1 ]]; then
   echo "status=ambiguous"
@@ -218,9 +253,10 @@ fi
 
 echo "status=resolved"
 echo "combo=$combo"
+echo "window=$start-$end"
 echo "family=$family"
 echo "reviewer=$reviewer"
 echo "models=$models_csv"
 echo "providers=$providers_csv"
-echo "usage_ids=$usage_ids_csv"
+echo "usage_ids=$ids_csv"
 exit 0
