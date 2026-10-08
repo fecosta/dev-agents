@@ -13,6 +13,8 @@
 #       status/reason/exit-code triples) and that family and reviewer agree
 #       (claude -> review-openai, non-claude -> review-claude). Anything else becomes
 #       RESOLVER_OUTPUT_INVALID. Resolver reasons are only propagated from a fixed list.
+#       Output framing is strict: one key=value record per line, no blank lines, no extra
+#       trailing newlines, no CRLF; a missing final newline is accepted.
 #
 # Env: NINEROUTER_DB (default ~/.9router/db/data.sqlite). DEV_AGENTS_RESOLVER overrides the
 # resolver path (tests only).
@@ -58,14 +60,20 @@ resolve() {
   [[ $((10#$end)) -ge $((10#$start)) ]] || blocked INVALID_WINDOW
   [[ -x "$RESOLVER" && -f "$RESOLVER" ]] || blocked RESOLVER_UNAVAILABLE
 
-  local out rc
-  out=$("$RESOLVER" "$start" "$end" "$alias" 2>/dev/null)
+  local tmp rc
+  tmp=$(mktemp) || blocked RESOLVER_OUTPUT_INVALID
+  trap 'rm -f "$tmp"' EXIT
+
+  "$RESOLVER" "$start" "$end" "$alias" >"$tmp" 2>/dev/null
   rc=$?
 
   # Strict parse: only key=value lines, known keys, no duplicates, safe characters.
+  # Framing is strict: one key=value record per line, no blank lines, no extra
+  # trailing newlines, no CRLF; a missing final newline is accepted.
   local status="" combo="" window="" family="" families="" reviewer="" models="" providers="" usage_ids="" reason=""
   local seen=" " line key val
-  while IFS= read -r line; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || blocked RESOLVER_OUTPUT_INVALID
     [[ "$line" =~ ^([a-z_]+)=([A-Za-z0-9._,-]*)$ ]] || blocked RESOLVER_OUTPUT_INVALID
     key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
     case "$seen" in *" $key "*) blocked RESOLVER_OUTPUT_INVALID ;; esac
@@ -83,7 +91,7 @@ resolve() {
       reason) reason="$val" ;;
       *) blocked RESOLVER_OUTPUT_INVALID ;;
     esac
-  done <<< "$out"
+  done < "$tmp"
 
   # Exact key set (duplicates were already rejected, so a sorted comparison is exact).
   local keyset want

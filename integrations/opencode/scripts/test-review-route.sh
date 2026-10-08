@@ -60,8 +60,18 @@ blocked_case() { # id reason stdout exit
   has_line "$1 reason" "reason=$2"
   case "$out" in *reviewer=*|*family=*) bad "$1 leaked reviewer/family" ;; *) ok "$1 no reviewer/family" ;; esac
 }
+# leak_check <id> <resolver> <expected_rc>: assert no mktemp file remains after the call
+check_no_leak() {
+  local ldir="$TMP/leak_$1"
+  mkdir -p "$ldir"
+  out=$(TMPDIR="$ldir" NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$2" "$RR" resolve 3 5 strong 2>/dev/null); rc=$?
+  eq "$1 rc" "$rc" "$3"
+  if [[ -n $(find "$ldir" -mindepth 1 -print -quit) ]]; then bad "$1 temp file leaked"; else ok "$1 no temp leak"; fi
+}
 # resolved_out <family> <reviewer> [extra "k=v\n" to append]; build one valid resolved body
 res() { printf 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=%s\nreviewer=%s\nmodels=m1\nproviders=p1\nusage_ids=4,5\n%b' "$1" "$2" "${3:-}"; }
+# same body, but with no terminating newline (framing tests)
+res_noterm() { printf 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=%s\nreviewer=%s\nmodels=m1\nproviders=p1\nusage_ids=4,5%b' "$1" "$2" "${3:-}"; }
 AMBIG='status=ambiguous\ncombo=strong\nreason=MODEL_DETECTION_AMBIGUOUS\nmodels=a,b\nfamilies=claude,non-claude\nproviders=x,y\n'
 
 # 13: documented ambiguous schema
@@ -138,6 +148,32 @@ blocked_case F13f RESOLVER_OUTPUT_INVALID 'status=resolved\ncombo=strong\nwindow
 route "$TMP/does-not-exist"; eq F14 "$rc" 3; has_line F15 "reason=RESOLVER_UNAVAILABLE"
 # window normalization: leading zeros in the request still match the resolver's numeric window
 out=$(NINEROUTER_DB="$DB" DEV_AGENTS_RESOLVER="$(stub s_norm "$(res claude review-openai)" 0)" "$RR" resolve 003 005 strong 2>/dev/null); eq F16 "$?" 0
+
+# --- FR: resolver stdout framing (blank-line detection)
+# A: exactly one trailing newline (the normal case) => resolved
+route "$(stub s_fra 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n' 0)"
+eq FR1 "$rc" 0; has_line FR1a "model_resolution=resolved"; has_line FR1b "family=claude"; has_line FR1c "reviewer=review-openai"
+# B: no trailing newline => resolved (final unterminated line is accepted)
+route "$(stub s_frb "$(res_noterm claude review-openai)" 0)"
+eq FR2 "$rc" 0; has_line FR2a "model_resolution=resolved"; has_line FR2b "family=claude"; has_line FR2c "reviewer=review-openai"
+# C/D: extra trailing blank lines => RESOLVER_OUTPUT_INVALID
+blocked_case FR3 RESOLVER_OUTPUT_INVALID 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n\n' 0
+blocked_case FR4 RESOLVER_OUTPUT_INVALID 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n\n\n' 0
+# E: leading blank line => RESOLVER_OUTPUT_INVALID
+blocked_case FR5 RESOLVER_OUTPUT_INVALID '\nstatus=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n' 0
+# F: blank line between records => RESOLVER_OUTPUT_INVALID
+blocked_case FR6 RESOLVER_OUTPUT_INVALID 'status=resolved\n\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n' 0
+# G: CRLF line endings => RESOLVER_OUTPUT_INVALID
+blocked_case FR7 RESOLVER_OUTPUT_INVALID 'status=resolved\r\ncombo=strong\r\nwindow=3-5\r\nfamily=claude\r\nreviewer=review-openai\r\nmodels=m1\r\nproviders=p1\r\nusage_ids=4,5\r\n' 0
+# H: reordered keys => accepted (keyset is sorted before comparison)
+route "$(stub s_frh 'reviewer=review-openai\nfamily=claude\nmodels=m1\nproviders=p1\nusage_ids=4,5\ncombo=strong\nwindow=3-5\nstatus=resolved\n' 0)"
+eq FR8 "$rc" 0; has_line FR8a "model_resolution=resolved"; has_line FR8b "family=claude"; has_line FR8c "reviewer=review-openai"
+# framing also enforced for non-resolved statuses
+blocked_case FR9 RESOLVER_OUTPUT_INVALID "${AMBIG}\n" 5
+blocked_case FR10 RESOLVER_OUTPUT_INVALID 'status=failed\nreason=MODEL_FAMILY_UNKNOWN\n\n' 7
+# temp-file cleanup on success and on blocked exit
+check_no_leak FR11 "$(stub s_frok "$(res claude review-openai)" 0)" 0
+check_no_leak FR12 "$(stub s_frbad 'status=resolved\ncombo=strong\nwindow=3-5\nfamily=claude\nreviewer=review-openai\nmodels=m1\nproviders=p1\nusage_ids=4,5\n\n' 0)" 3
 
 # 16: family/reviewer mismatch => fail closed
 blocked_case G1 RESOLVER_OUTPUT_INVALID "$(res claude review-claude)" 0
