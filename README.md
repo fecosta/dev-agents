@@ -1,6 +1,6 @@
 # dev-agents
 
-Reusable orchestration contracts for AI-assisted development with OpenCode and 9Router.
+Reusable orchestration contracts for capability-based AI development workflows with OpenCode and 9Router.
 
 ## Capability aliases
 - `economy`
