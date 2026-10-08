@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "economy": {"mode": "primary", "model": "9router/economy"},
+    "standard": {"mode": "primary", "model": "9router/standard"},
+    "strong": {"mode": "primary", "model": "9router/strong"},
+    "premium": {"mode": "primary", "model": "9router/premium"},
+    "review-openai": {"mode": "subagent", "model": "9router/review-openai", "tools": {"write": false, "edit": false}},
+    "review-claude": {"mode": "subagent", "model": "9router/review-claude", "tools": {"write": false, "edit": false}},
+    "explorer": {"mode": "subagent", "model": "9router/ocg/deepseek-v4.1-flash"}
+  },
+  "model": "9router/economy"
+}
