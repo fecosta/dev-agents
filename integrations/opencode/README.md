@@ -7,7 +7,8 @@ This adapter turns the portable dev-agents contracts into native OpenCode comman
 - **v2 (history):** `/implement-spec` routes and delegates exactly one bounded implementation unit to `economy`, `standard`, `strong`, or `premium`.
 - **v3a:** conditional independent review and opposite-family routing, with `REVIEW_BLOCKED_MODEL_UNKNOWN` when the family was not observable.
 - **v3b.1:** standalone 9Router runtime model resolver (below).
-- **v3b.2 (current):** the orchestrator uses the resolver to pick the opposite-family reviewer from runtime evidence, and fails closed otherwise (see "Runtime family detection flow").
+- **v3b.2:** the orchestrator uses the resolver to pick the opposite-family reviewer from runtime evidence, and fails closed otherwise (see "Runtime family detection flow").
+- **v3c.1 (current):** read-only orchestration doctor and health checks (`/doctor`, `doctor.sh`; see "Doctor (v3c.1)"). No routing, resolver, reviewer-selection or review-semantics change.
 
 ## Required OpenCode configuration change
 
@@ -31,8 +32,11 @@ mkdir -p ~/.config/opencode/agents ~/.config/opencode/commands
 cp integrations/opencode/agents/orchestrator.md ~/.config/opencode/agents/
 cp integrations/opencode/commands/*.md ~/.config/opencode/commands/
 mkdir -p ~/.config/opencode/scripts
-cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/scripts/review-route.sh ~/.config/opencode/scripts/
+cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/scripts/review-route.sh integrations/opencode/scripts/doctor.sh ~/.config/opencode/scripts/
+cp integrations/opencode/agents/doctor.md ~/.config/opencode/agents/
 ```
+
+`commands/*.md` already includes `doctor.md`. `agents/doctor.md` is a separate, read-only diagnostic agent used only by `/doctor`; it does not touch or replace the orchestrator. The scripts must stay executable (`cp` preserves the mode of the repo files).
 
 OpenCode reloads command and agent files automatically, but using a fresh session is recommended for the first delegation test.
 
@@ -126,6 +130,47 @@ Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` 
 - Ambiguous resolution is expected sometimes, for example overlapping `strong`/`premium` traffic whose families differ. It blocks review rather than guessing.
 - The family is never inferred from the capability tier, combo definition, fallback order, child alias, or provider assumptions, and children are never asked to self-report it as authority.
 - Future upgrade path: a 9Router/OpenCode session correlation id recorded per usage row, which would let the resolver scope the window exactly.
+
+## Doctor (v3c.1)
+
+Read-only health check for the installed orchestration. Run `/doctor` in OpenCode, or directly:
+
+```bash
+~/.config/opencode/scripts/doctor.sh [--machine] [--quiet]
+```
+
+- Default: one line per check `PASS|WARN|FAIL  <name>  <detail>` (recommended fix commands indented under non-pass checks as `hint: ...`), a `Summary:` line, then the stable lines `overall=pass|warn|fail`, `passed=N`, `warnings=N`, `failed=N`.
+- `--machine`: machine lines only. Per check `check=<name>`, `status=pass|warn|fail`, `detail=<safe text>`, plus `hint=<text>` for non-pass checks; then the summary lines. Split each line at the first `=`.
+- `--quiet`: only non-pass checks (with hints) and the summary; combines with `--machine`.
+- **Exit codes:** `0` all PASS (skipped checks count as PASS), `1` at least one WARN and no FAIL, `64` usage error, `2` at least one FAIL.
+- **Meaning:** FAIL = the installed orchestration cannot work or is unsafe to use (missing required tool/file/config/table, helper or resolver misbehaving). WARN = degraded, stale or unverifiable (stale or missing optional file, `jq` missing, a dependent check that could not run because its prerequisite failed: `not checked: ...`).
+
+Checks (names are stable):
+
+| Group | Checks |
+| --- | --- |
+| Executables | `exe_bash`, `exe_sqlite3` (missing = FAIL), `exe_git` (missing = WARN), `exe_opencode` (missing = FAIL); versions are reported |
+| Installed files (`~/.config/opencode`) | `installed_orchestrator`, `installed_commands` (implement-spec, route-task, review-change, split-spec), `installed_scripts` (review-route.sh, resolve-model-family.sh; must be executable); all FAIL if absent. `installed_doctor` (doctor command, agent, script): missing = WARN |
+| Stale installs | `orchestrator_sync`, `command_sync` (every repo `commands/*.md`), `review_route_sync`, `resolver_sync`, `doctor_sync`: SHA-256 (`cksum` fallback) of the installed copy vs the repository; difference or missing = WARN `installed copy differs from repository` |
+| OpenCode config | `config_file` (`opencode.json` exists and is valid JSON; missing/invalid = FAIL; no `jq` = WARN, agent checks then `not checked`), `config_impl_agents` (economy/standard/strong/premium: mode `all`, model `9router/*`), `config_review_agents` (review-openai/review-claude: mode `subagent`, model `9router/*`), `config_explorer` (mode `subagent`; WARN if not). Both the `agent` and `agents` keys are read. Upstream model names behind the 9Router aliases are not checked |
+| 9Router DB (read-only metadata) | `db_file`, `db_open`, `db_combos` (`name`, `models`), `db_usagehistory` (`id`, `provider`, `model`, `status`); path `${NINEROUTER_DB:-$HOME/.9router/db/data.sqlite}` |
+| Helpers | `checkpoint` (installed `review-route.sh checkpoint start`: exit 0, exactly one `^[0-9]{1,15}$` line, empty stderr), `resolver_syntax` (`bash -n`), `resolver_smoke_non_claude` / `resolver_smoke_claude` (installed resolver on a temporary fixture DB must yield `family=non-claude reviewer=review-claude` and `family=claude reviewer=review-openai`), `framing_valid` / `framing_malformed` / `framing_trailing_blank` (installed `review-route.sh resolve` run against stub resolvers via its `DEV_AGENTS_RESOLVER` override: valid output accepted, malformed or blank-line-framed output rejected with `RESOLVER_OUTPUT_INVALID`) |
+
+Sync checks run only when `doctor.sh` is executed from a dev-agents checkout (its own location is `<root>/integrations/opencode/scripts` and `<root>/integrations/opencode/agents/orchestrator.md` exists). Elsewhere (for example the installed copy) they report `status=pass detail=skipped (not a dev-agents checkout)` and do not affect the exit code. To check for stale installs, run `integrations/opencode/scripts/doctor.sh` from the checkout.
+
+**Strictly read-only:** the doctor never installs, copies, repairs or edits anything and never changes Git, OpenCode config or 9Router. It reads files, opens the DB with `sqlite3 -readonly` + `PRAGMA query_only=1` (only `sqlite_master`/`table_info` metadata plus the checkpoint `MAX(id)`), and does fixture tests in a `mktemp` directory removed on exit. It never selects credential-bearing columns and never prints config values, so no secrets appear in output. It never calls an LLM.
+
+**Recommended manual sync** (printed as hints only; run them yourself from the checkout, auto-sync is a later unit):
+
+```bash
+cp integrations/opencode/agents/*.md ~/.config/opencode/agents/
+cp integrations/opencode/commands/*.md ~/.config/opencode/commands/
+cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/scripts/review-route.sh integrations/opencode/scripts/doctor.sh ~/.config/opencode/scripts/
+```
+
+**`/doctor` agent:** `commands/doctor.md` runs with the separate `doctor` agent (`agents/doctor.md`), which denies every action except the shell command `~/.config/opencode/scripts/doctor.sh`. It cannot edit files and does not use the orchestrator.
+
+**Limitations:** the doctor does not validate volatile upstream models behind the 9Router aliases or live 9Router connectivity; the fixture smoke tests are not the full suites (run `test-resolve-model-family.sh`, `test-review-route.sh` and `test-doctor.sh` from the checkout for those). The usage-history window limitation described above is unchanged. Tests: `integrations/opencode/scripts/test-doctor.sh` (bash 3.2+; temporary HOME, config and DB only).
 
 ## First test
 
