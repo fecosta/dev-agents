@@ -8,7 +8,8 @@ This adapter turns the portable dev-agents contracts into native OpenCode comman
 - **v3a:** conditional independent review and opposite-family routing, with `REVIEW_BLOCKED_MODEL_UNKNOWN` when the family was not observable.
 - **v3b.1:** standalone 9Router runtime model resolver (below).
 - **v3b.2:** the orchestrator uses the resolver to pick the opposite-family reviewer from runtime evidence, and fails closed otherwise (see "Runtime family detection flow").
-- **v3c.1 (current):** read-only orchestration doctor and health checks (`/doctor`, `doctor.sh`; see "Doctor (v3c.1)"). No routing, resolver, reviewer-selection or review-semantics change.
+- **v3c.1 (history):** read-only orchestration doctor and health checks (`/doctor`, `doctor.sh`; see "Doctor (v3c.1)"). No routing, resolver, reviewer-selection or review-semantics change.
+- **v3c.2 (current):** safe install/sync of the integration files into `~/.config/opencode` (`/sync-install`, `sync-install.sh`; see "Sync install (v3c.2)"). Preview by default, writes only with `--apply`. No routing, resolver, reviewer-selection or review-semantics change.
 
 ## Required OpenCode configuration change
 
@@ -25,18 +26,20 @@ Keep `review-openai`, `review-claude`, and `explorer` as `subagent`.
 
 ## Install
 
-Copy:
+Preferred: from the dev-agents checkout, preview and then apply the sync (see "Sync install (v3c.2)"):
 
 ```bash
-mkdir -p ~/.config/opencode/agents ~/.config/opencode/commands
-cp integrations/opencode/agents/orchestrator.md ~/.config/opencode/agents/
-cp integrations/opencode/commands/*.md ~/.config/opencode/commands/
-mkdir -p ~/.config/opencode/scripts
-cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/scripts/review-route.sh integrations/opencode/scripts/doctor.sh ~/.config/opencode/scripts/
-cp integrations/opencode/agents/doctor.md ~/.config/opencode/agents/
+./integrations/opencode/scripts/sync-install.sh --check
+./integrations/opencode/scripts/sync-install.sh --apply
 ```
 
-`commands/*.md` already includes `doctor.md`. `agents/doctor.md` is a separate, read-only diagnostic agent used only by `/doctor`; it does not touch or replace the orchestrator. The scripts must stay executable (`cp` preserves the mode of the repo files).
+**First-time bootstrap** (the `/sync-install` command and agent are not installed yet; the helper itself runs from the checkout, so `--apply` also works without any bootstrap). To install by hand, copy exactly these files (13) from `integrations/opencode/` to `~/.config/opencode/` (same relative paths, scripts executable):
+
+- `agents/`: `orchestrator.md`, `doctor.md`, `sync-install.md`
+- `commands/`: `implement-spec.md`, `route-task.md`, `review-change.md`, `split-spec.md`, `doctor.md`, `sync-install.md`
+- `scripts/` (mode 755): `review-route.sh`, `resolve-model-family.sh`, `doctor.sh`, `sync-install.sh`
+
+`agents/doctor.md` and `agents/sync-install.md` are separate, narrowly permissioned agents used only by `/doctor` and `/sync-install`; they do not touch or replace the orchestrator.
 
 OpenCode reloads command and agent files automatically, but using a fresh session is recommended for the first delegation test.
 
@@ -160,7 +163,7 @@ Sync checks run only when `doctor.sh` is executed from a dev-agents checkout (it
 
 **Strictly read-only:** the doctor never installs, copies, repairs or edits anything and never changes Git, OpenCode config or 9Router. It reads files, opens the DB with `sqlite3 -readonly` + `PRAGMA query_only=1` (only `sqlite_master`/`table_info` metadata plus the checkpoint `MAX(id)`), and does fixture tests in a `mktemp` directory removed on exit. It never selects credential-bearing columns and never prints config values, so no secrets appear in output. It never calls an LLM.
 
-**Recommended manual sync** (printed as hints only; run them yourself from the checkout, auto-sync is a later unit):
+**Recommended manual sync** (printed as hints only; `doctor.sh` is unchanged and still prints these `cp` commands, but `sync-install.sh --apply` from the checkout, see "Sync install (v3c.2)", is the preferred alternative):
 
 ```bash
 cp integrations/opencode/agents/*.md ~/.config/opencode/agents/
@@ -173,6 +176,55 @@ cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/s
 **Limitations:** the doctor does not validate volatile upstream models behind the 9Router aliases or live 9Router connectivity; the fixture smoke tests are not the full suites (run `test-resolve-model-family.sh`, `test-review-route.sh` and `test-doctor.sh` from the checkout for those). The usage-history window limitation described above is unchanged. Tests: `integrations/opencode/scripts/test-doctor.sh` (bash 3.2+; temporary HOME, config and DB only).
 
 Run /doctor after updating the installed OpenCode integration to verify the environment remains healthy.
+
+## Sync install (v3c.2)
+
+Safe, explicit sync of the integration files from the checkout into `~/.config/opencode`.
+
+```text
+/sync-install            # preview (same as --check), read-only
+/sync-install --check    # preview, read-only
+/sync-install --apply    # perform the sync
+```
+
+Direct equivalents, run from the dev-agents checkout:
+
+```bash
+./integrations/opencode/scripts/sync-install.sh            # == --check
+./integrations/opencode/scripts/sync-install.sh --check
+./integrations/opencode/scripts/sync-install.sh --apply
+```
+
+**Checkout-only source.** The repository is the authoritative source and the script derives its root from its own location (`<root>/integrations/opencode/scripts`), never from the working directory. It requires `<root>/AGENTS.md`, `<root>/integrations/opencode/agents/orchestrator.md` and `<root>/integrations/opencode/scripts/doctor.sh`; otherwise it prints `status=failed`, `reason=SOURCE_REPOSITORY_UNVERIFIED`, `sync_status=failed`, exits 2 and writes nothing. The installed copy `~/.config/opencode/scripts/sync-install.sh` exists for completeness (it is in the manifest) but is not in a checkout, so `~/.config/opencode/scripts/sync-install.sh --check|--apply` always fails closed with `SOURCE_REPOSITORY_UNVERIFIED`. For the same reason `/sync-install` (agent `sync-install`) runs the relative `integrations/opencode/scripts/sync-install.sh` and must be started from the checkout; its shell permission allows exactly that command with no argument, `--check`, or `--apply`, and nothing else.
+
+**Preview by default; `--apply` required for writes.** `/sync-install` with no or `--check` argument is read-only. The agent runs `--apply` only when the arguments literally contain `--apply`. No prompts.
+
+**Managed manifest** (hard-coded in the script, the complete write boundary; source `integrations/opencode/<entry>`, destination `~/.config/opencode/<entry>`):
+
+```text
+agents/orchestrator.md  agents/doctor.md  agents/sync-install.md
+commands/implement-spec.md  commands/route-task.md  commands/review-change.md  commands/split-spec.md  commands/doctor.md  commands/sync-install.md
+scripts/review-route.sh  scripts/resolve-model-family.sh  scripts/doctor.sh  scripts/sync-install.sh
+```
+
+**Never touched:** `opencode.json(c)`, provider/plugin/MCP configuration, `~/.9router`, and any destination file not in the manifest. The script never deletes destination files, creates no backups, uses no globs, directory copies or `rsync`, and runs no Git commands. It does not read OpenCode config or the 9Router DB, and prints no secrets.
+
+**Drift detection.** Files are compared by content (byte comparison, never timestamps). Per manifest entry, in order: `file=<rel>` then `status=in_sync|missing|different`. A manifest script whose content matches but is not executable is `different` (fix is `chmod 755` only; reported as `would_chmod=` in preview and `chmodded=` on apply). Summary: `sync_status=clean|drift|failed`, `in_sync=N`, `different=N`, `missing=N`. Preview also lists `would_copy=<rel>` / `would_chmod=<rel>`.
+
+**Apply behavior.** The whole plan is computed and every item validated before the first write: sources must be regular, readable, non-symlink files inside the checkout; manifest strings must be `<agents|commands|scripts>/<name>` (no `..`, no leading `/`, no empty segment); `HOME` must be set, absolute and an existing directory; `~/.config/opencode` and its `agents`, `commands`, `scripts` subdirectories must not be symlinks and must resolve physically under the root, and no existing destination file may be a symlink or non-regular file. Any violation aborts everything with `status=failed` and `reason=SOURCE_FILE_MISSING` or `DESTINATION_UNSAFE`, exit 2. Only the three subdirectories are created when absent. Only `missing`/`different` files are written (in-sync files are never rewritten), each through a temp file `.sync-install.XXXXXX` in the same directory with explicit mode (scripts 755, markdown 644) and an atomic `mv` onto the managed path; temp files are removed on exit/interrupt. `copied=<rel>` and `chmodded=<rel>` lines report what changed.
+
+**Post-apply doctor.** After the copy, apply always runs the installed `~/.config/opencode/scripts/doctor.sh --machine` (also when everything was already in sync; the sync script does not duplicate doctor checks). Success requires doctor exit 0, `overall=pass`, `warnings=0` and `failed=0`; it prints `doctor_overall`, `doctor_passed`, `doctor_warnings`, `doctor_failed`, `doctor_exit`, then `status=applied`, `sync_status=clean`. Otherwise it prints those lines plus every non-pass check as `doctor_check=`, `doctor_check_status=`, `doctor_check_detail=`, then `status=failed`, `reason=POST_INSTALL_DOCTOR_FAILED`, and exits 2. A missing or non-executable installed doctor is the same failure. **There is no automatic rollback**: the copied files stay installed; fix the reported problem (often an `opencode.json` or 9Router issue outside this script's scope) and re-run `/doctor`.
+
+**Output and exit codes.** Output is `key=value` lines: `mode=check|apply`, the `file=`/`status=` pairs, then (apply) `copied=`/`chmodded=`/`doctor_*`, then the overall `status=applied|failed` (the only `status=` line not directly after a `file=` line), `reason=` and `detail=` on failure, `sync_status=`, and the counts (post-apply state in apply mode). Reasons: `USAGE`, `SOURCE_REPOSITORY_UNVERIFIED`, `SOURCE_FILE_MISSING`, `HOME_INVALID`, `DESTINATION_UNSAFE`, `COPY_FAILED`, `POST_INSTALL_DOCTOR_FAILED`.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | preview: clean; apply: applied and doctor passed |
+| `1` | preview: drift found |
+| `2` | setup or validation failure, or post-install doctor not clean |
+| `64` | usage error (unsupported argument, or more than one argument); nothing written |
+
+**Tests:** `integrations/opencode/scripts/test-sync-install.sh` (bash 3.2+; `mktemp` fixture repo and HOME only, stub doctor; never the real `~/.config/opencode` or `~/.9router`).
 
 ## First test
 
