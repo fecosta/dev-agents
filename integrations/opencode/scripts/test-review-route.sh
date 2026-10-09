@@ -22,6 +22,12 @@ eq() { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (got '$2', want '$3')";
 has() { if grep -qF -- "$3" "$2"; then ok "$1"; else bad "$1 (missing: $3)"; fi; }
 hasnot() { if grep -qF -- "$3" "$2"; then bad "$1 (found: $3)"; else ok "$1"; fi; }
 
+# Normalize extracted YAML frontmatter for stable comparison: strip trailing
+# whitespace only (spaces, tabs, CR). Leading whitespace is preserved because
+# YAML indentation is significant. This is textual normalization, not a full
+# YAML parse, so it ignores only trailing-whitespace-only differences.
+norm_fm() { sed -e 's/[[:space:]]*$//'; }
+
 DB="$TMP/t.sqlite"
 sqlite3 "$DB" "CREATE TABLE usageHistory (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT, model TEXT, apiKey TEXT, status TEXT);
 INSERT INTO usageHistory(provider,model,apiKey,status) VALUES ('codex','gpt-5.6-sol','SECRET','ok'),('codex','gpt-5.6-sol','SECRET','ok'),('codex','gpt-5.6-sol','SECRET','ok');"
@@ -356,10 +362,30 @@ hasnot R3 "$README" "integration comes later"
 has R4 "$README" "REVIEW_BLOCKED_MODEL_RESOLUTION"
 has R5 "$README" "correlation id"
 
-# --- orchestrator permissions front matter unchanged vs the v3b.1 baseline commit (526df80)
-head_fm=$(git -C "$ROOT" show 526df80:integrations/opencode/agents/orchestrator.md 2>/dev/null | awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f')
-cur_fm=$(awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' "$ORCH")
+# --- P: orchestrator permissions front matter unchanged vs the v3b.1 baseline commit (526df80)
+# Normalize: strip trailing whitespace only; preserve leading indentation.
+head_fm=$(git -C "$ROOT" show 526df80:integrations/opencode/agents/orchestrator.md 2>/dev/null | awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' | norm_fm)
+cur_fm=$(awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' "$ORCH" | norm_fm)
 if [[ -z "$head_fm" ]]; then bad "P1 cannot read baseline front matter"; else eq P1 "$cur_fm" "$head_fm"; fi
+
+# Regression tests for the frontmatter comparison helper.
+awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' "$ORCH" > "$TMP/fm_base"
+
+# P2: trailing-whitespace-only differences are ignored.
+sed -e 's/$/    /' "$TMP/fm_base" > "$TMP/fm_ws"
+if [[ "$(norm_fm < "$TMP/fm_base")" == "$(norm_fm < "$TMP/fm_ws")" ]]; then ok "P2 trailing whitespace ignored"; else bad "P2 trailing whitespace ignored"; fi
+
+# P3: a real permission change is still detected.
+awk '/resource: review-claude/{seen=1} seen && /effect: allow/{sub("allow","deny"); seen=0} {print}' "$TMP/fm_base" > "$TMP/fm_perm"
+if [[ "$(norm_fm < "$TMP/fm_base")" != "$(norm_fm < "$TMP/fm_perm")" ]]; then ok "P3 permission change detected"; else bad "P3 permission change detected"; fi
+
+# P4: a mode/model value change is still detected.
+sed -e 's/^mode: primary$/mode: subagent/' "$TMP/fm_base" > "$TMP/fm_mode"
+if [[ "$(norm_fm < "$TMP/fm_base")" != "$(norm_fm < "$TMP/fm_mode")" ]]; then ok "P4 mode change detected"; else bad "P4 mode change detected"; fi
+
+# P5: an indentation-only change is still detected (leading whitespace is protected).
+sed -e 's/^permissions:$/  permissions:/' "$TMP/fm_base" > "$TMP/fm_indent"
+if [[ "$(norm_fm < "$TMP/fm_base")" != "$(norm_fm < "$TMP/fm_indent")" ]]; then ok "P5 indentation change detected"; else bad "P5 indentation change detected"; fi
 
 echo "passed=$pass failed=$failn"
 [[ $failn -eq 0 ]]
