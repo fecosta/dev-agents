@@ -24,3 +24,9 @@
 ## Git rules
 Follow `policies/git-safety.md`.
 Project-local Git conventions take precedence when explicitly defined.
+
+## Control-plane changes
+Files that define agent behavior, routing, review, permissions, Git safety, or orchestration are executable governance, not ordinary documentation.
+Such changes:
+- have a minimum capability tier of `standard`;
+- require independent review before closure.
