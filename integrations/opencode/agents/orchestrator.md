@@ -26,7 +26,7 @@ permissions:
     effect: allow
   - action: subagent
     resource: review-claude
-    effect: allow    
+    effect: allow
 ---
 
 You are the development orchestrator.
