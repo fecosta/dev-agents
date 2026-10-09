@@ -32,7 +32,7 @@ commands/implement-spec.md commands/route-task.md commands/review-change.md comm
 scripts/review-route.sh scripts/resolve-model-family.sh scripts/doctor.sh scripts/sync-install.sh"
 NMAN=13
 
-F=""; REPO=""; HM=""; CFG=""
+F=""; REPO=""; HM=""; CFG=""; HOOK=""; RUNPATH="$REAL_PATH"
 stub_doctor() { # <mode: pass|warn|fail|exit127|empty>
   local f="$REPO/integrations/opencode/scripts/doctor.sh"
   case "$1" in
@@ -64,6 +64,7 @@ mkfix() { # <name> [doctor mode]: fixture repo + fixture HOME with sentinels, EM
   printf '{"provider":{"9router":{"options":{"apiKey":"%s"}}}}\n' "$SECRET_CFG" >"$CFG/opencode.json"
   printf 'router-sentinel-data %s\n' "$SECRET_CFG" >"$HM/.9router/db/data.sqlite"
   SYNC="$REPO/integrations/opencode/scripts/sync-install.sh"
+  HOOK=""; RUNPATH="$REAL_PATH"
 }
 
 install_all() { # make the install fully in sync (simulates a prior apply)
@@ -80,7 +81,7 @@ OUT=""; RC=0
 run() { # args... ; runs the FIXTURE copy with HOME=fixture
   case "$SYNC" in "$TMP"/*) ;; *) echo "refusing to run non-fixture script" >&2; exit 2 ;; esac
   case "$HM" in "$TMP"/*) ;; *) echo "refusing non-fixture HOME" >&2; exit 2 ;; esac
-  OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" SECRET_ENV="$SECRET_ENV" "$BASH_BIN" "$SYNC" "$@" 2>&1 </dev/null); RC=$?
+  OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$RUNPATH" SECRET_ENV="$SECRET_ENV" ${HOOK:+"DEV_AGENTS_SYNC_TEST_HOOK=$HOOK"} "$BASH_BIN" "$SYNC" "$@" 2>&1 </dev/null); RC=$?
 }
 
 fsum() { shasum -a 256 <"$1" | awk '{print $1}'; }
@@ -368,6 +369,191 @@ eq "HOME cases: cwd clean" "$(ls -A "$TMP/cwd" | wc -l | tr -d ' ')" 0
 # No leftover temp files after success
 mkfix lt; run --apply
 eq "no .sync-install temp leftovers" "$(find "$HM" -name '.sync-install.*' | wc -l | tr -d ' ')" 0
+
+# --- v3c.2 hardening: post-preflight races, staging, checksum tool ---------------------------
+# The script's test-only hook (DEV_AGENTS_SYNC_TEST_HOOK) runs "<hook> <phase> <entry>" right before
+# each revalidation+operation, so a swap done by the hook is exercised by the live recheck.
+mkhook() { # <name> <sh body; $1=phase $2=entry>: sets HOOK to an absolute executable fixture script
+  HOOK="$F/hook-$1.sh"
+  printf '#!/bin/sh\n%s\n' "$2" >"$HOOK"; chmod 755 "$HOOK"
+}
+
+# R1: hook invocation rules
+mkfix hk1; install_all; echo x >"$CFG/agents/doctor.md"
+mkhook log "echo \"\$1 \$2\" >>\"$F/hook.log\"; echo status=hooked; echo reason=HOOKED; exit 3"
+run --apply
+eq "R1 exit 0 (hook exit status ignored)" "$RC" 0
+lacks "R1 hook stdout not in output" "$OUT" "hooked"
+hasline "R1 after_staging fired" "$(cat "$F/hook.log")" "after_staging "
+hasline "R1 before_mktemp fired" "$(cat "$F/hook.log")" "before_mktemp agents/doctor.md"
+hasline "R1 before_mv fired" "$(cat "$F/hook.log")" "before_mv agents/doctor.md"
+nline "R1 before_chmod not fired (no chmod action)" "$(cat "$F/hook.log")" "before_chmod agents/doctor.md"
+mkfix hk2; echo x >/dev/null
+mkhook log "echo \"\$1\" >>\"$F/hook.log\""
+HOOK=""; run --apply
+eq "R1 unset: hook not invoked" "$(test -e "$F/hook.log" && echo yes || echo no)" no
+mkhook log "echo \"\$1\" >>\"$F/hook.log\""; chmod 644 "$HOOK"
+run --apply
+eq "R1 non-executable: hook not invoked" "$(test -e "$F/hook.log" && echo yes || echo no)" no
+eq "R1 non-executable: apply still ok" "$RC" 0
+mkfix hk3
+printf '#!/bin/sh\necho "$1" >>"%s/hook.log"\n' "$F" >"$F/relhook.sh"; chmod 755 "$F/relhook.sh"
+HOOK="relhook.sh"; cp "$F/relhook.sh" "$TMP/cwd/relhook.sh"
+run --apply
+rm -f "$TMP/cwd/relhook.sh"
+eq "R1 relative path: hook not invoked" "$(test -e "$F/hook.log" && echo yes || echo no)" no
+eq "R1 relative path: apply still ok" "$RC" 0
+
+# R2 (finding A): destination subdir swapped to a symlink after validation, before mktemp / before mv
+for ph in before_mktemp before_mv; do
+  mkfix ra_$ph; install_all; echo changed >"$CFG/commands/route-task.md"
+  mkdir "$F/outside"; echo precious >"$F/outside/route-task.md"; echo keep >"$F/outside/other.txt"
+  mkhook swap "[ \"\$1\" = $ph ] && [ \"\$2\" = commands/route-task.md ] && mv \"$CFG/commands\" \"$F/moved-commands\" && ln -s \"$F/outside\" \"$CFG/commands\"; exit 0"
+  ob=$(snap "$F/outside")
+  run --apply
+  eq "R2 $ph exit 2" "$RC" 2
+  hasline "R2 $ph DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+  hasline "R2 $ph status=failed" "$OUT" "status=failed"
+  eq "R2 $ph outside byte-identical (no new files)" "$(snap "$F/outside")" "$ob"
+  eq "R2 $ph symlink not followed (still link)" "$(test -L "$CFG/commands" && echo yes)" yes
+  nline "R2 $ph nothing reported copied" "$OUT" "copied=commands/route-task.md"
+done
+
+# R3 (finding B): managed destination file swapped to a symlink before the replacing mv
+mkfix rb; install_all; echo changed >"$CFG/agents/doctor.md"; echo external >"$F/outside.txt"; chmod 600 "$F/outside.txt"
+mkhook swap "[ \"\$1\" = before_mv ] && [ \"\$2\" = agents/doctor.md ] && rm -f \"$CFG/agents/doctor.md\" && ln -s \"$F/outside.txt\" \"$CFG/agents/doctor.md\"; exit 0"
+oh=$(fsum "$F/outside.txt")
+run --apply
+eq "R3 exit 2" "$RC" 2
+hasline "R3 DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "R3 external target content untouched" "$(fsum "$F/outside.txt")" "$oh"
+eq "R3 external target mode untouched" "$(ls -l "$F/outside.txt" | cut -c1-10)" "-rw-------"
+eq "R3 dest still the symlink (not replaced through)" "$(test -L "$CFG/agents/doctor.md" && echo yes)" yes
+eq "R3 temp file cleaned up" "$(find "$CFG" -name '.sync-install.*' | wc -l | tr -d ' ')" 0
+
+# R4 (finding C): chmod-only action; destination swapped to a symlink before chmod
+mkfix rc; install_all; chmod 644 "$CFG/scripts/review-route.sh"
+echo "external script" >"$F/outside.sh"; chmod 644 "$F/outside.sh"
+mkhook swap "[ \"\$1\" = before_chmod ] && [ \"\$2\" = scripts/review-route.sh ] && rm -f \"$CFG/scripts/review-route.sh\" && ln -s \"$F/outside.sh\" \"$CFG/scripts/review-route.sh\"; exit 0"
+oh=$(fsum "$F/outside.sh")
+run --check
+hasline "R4 plan has would_chmod" "$OUT" "would_chmod=scripts/review-route.sh"
+run --apply
+eq "R4 exit 2" "$RC" 2
+hasline "R4 DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "R4 external mode unchanged" "$(ls -l "$F/outside.sh" | cut -c1-10)" "-rw-r--r--"
+eq "R4 external content unchanged" "$(fsum "$F/outside.sh")" "$oh"
+nline "R4 not reported chmodded" "$OUT" "chmodded=scripts/review-route.sh"
+
+# R5: earlier work is still reported when a later swap aborts (apply_fail prints copied=)
+mkfix rd; install_all; echo c1 >"$CFG/agents/doctor.md"; echo c2 >"$CFG/commands/route-task.md"; mkdir "$F/outside"
+mkhook swap "[ \"\$1\" = before_mktemp ] && [ \"\$2\" = commands/route-task.md ] && mv \"$CFG/commands\" \"$F/moved\" && ln -s \"$F/outside\" \"$CFG/commands\"; exit 0"
+run --apply
+eq "R5 exit 2" "$RC" 2
+hasline "R5 earlier copy reported" "$OUT" "copied=agents/doctor.md"
+eq "R5 outside empty" "$(ls -A "$F/outside" | wc -l | tr -d ' ')" 0
+
+# R6 (finding D): repo source path swapped to a symlink/external file after the snapshot
+mkfix re; echo "EXTERNAL-DATA" >"$F/external.md"
+mkhook swap "[ \"\$1\" = after_staging ] && rm -f \"$REPO/integrations/opencode/commands/route-task.md\" && ln -s \"$F/external.md\" \"$REPO/integrations/opencode/commands/route-task.md\"; exit 0"
+run --apply
+eq "R6 exit 0" "$RC" 0
+eq "R6 installed = staged original" "$(cat "$CFG/commands/route-task.md")" "dummy commands/route-task.md v1"
+eq "R6 installed file is a regular file" "$(test -f "$CFG/commands/route-task.md" && test ! -L "$CFG/commands/route-task.md" && echo yes)" yes
+eq "R6 external data never installed" "$(grep -rl EXTERNAL-DATA "$CFG" | wc -l | tr -d ' ')" 0
+
+# R7 (finding E): repo source bytes mutated after the snapshot
+mkfix rf
+mkhook mut "[ \"\$1\" = after_staging ] && echo MUTATED >\"$REPO/integrations/opencode/agents/orchestrator.md\" && echo MUTATED >\"$REPO/integrations/opencode/commands/route-task.md\"; exit 0"
+run --apply
+eq "R7 exit 0" "$RC" 0
+eq "R7 agents bytes = staged original" "$(cat "$CFG/agents/orchestrator.md")" "dummy agents/orchestrator.md v1"
+eq "R7 commands bytes = staged original" "$(cat "$CFG/commands/route-task.md")" "dummy commands/route-task.md v1"
+eq "R7 no MUTATED installed" "$(grep -rl MUTATED "$CFG" | wc -l | tr -d ' ')" 0
+mkfix rf2; install_all
+mkhook mut "[ \"\$1\" = after_staging ] && echo MUTATED >\"$REPO/integrations/opencode/agents/orchestrator.md\"; exit 0"
+run --check
+eq "R7 check: drift decided from staged copy (clean)" "$RC" 0
+
+# R8: staging dir removed, in every outcome
+tcount() { find "$1" -maxdepth 1 -name 'sync-install.*' | wc -l | tr -d ' '; }
+mkfix rs; mkdir "$F/tmpd"
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "R8 apply ok with TMPDIR" "$RC" 0
+eq "R8 staging removed after apply" "$(tcount "$F/tmpd")" 0
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" "$BASH_BIN" "$SYNC" --check 2>&1 </dev/null); RC=$?
+eq "R8 staging removed after check" "$(tcount "$F/tmpd")" 0
+mkfix rs2; mkdir "$F/tmpd"; rm "$REPO/integrations/opencode/commands/split-spec.md"
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "R8 failing run exits 2" "$RC" 2
+eq "R8 staging removed after failure" "$(tcount "$F/tmpd")" 0
+mkfix rs3; mkdir "$F/tmpd"; install_all; echo x >"$CFG/agents/doctor.md"
+mkhook st "[ \"\$1\" = after_staging ] && ls \"$F/tmpd\"/sync-install.*/agents >\"$F/stg.list\"; stat -f %Lp \"$F/tmpd\"/sync-install.* >\"$F/stg.mode\" 2>/dev/null || stat -c %a \"$F\"/tmpd/sync-install.* >\"$F/stg.mode\"; exit 0"
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --check 2>&1 </dev/null); RC=$?
+contains "R8 staged snapshot holds managed files" "$(cat "$F/stg.list")" "doctor.md"
+eq "R8 staging dir mode 700" "$(cat "$F/stg.mode")" 700
+
+# R9 (finding 3): checksum tool selection through PATH only
+mkbin() { # <dir> <shasum|sha256sum|none>: restricted PATH dir; shasum/sha256sum are logging wrappers
+  local d="$1" t real
+  mkdir -p "$d"
+  for t in dirname mktemp mkdir chmod cat rm rmdir mv ls tr cut sed grep head cksum stat; do
+    real=$(PATH="$REAL_PATH" command -v "$t") && ln -sf "$real" "$d/$t"
+  done
+  real=$(PATH="$REAL_PATH" command -v shasum)
+  case "$2" in
+    shasum) printf '#!/bin/sh\necho "shasum $*" >>"%s/tool.log"\nexec "%s" "$@"\n' "$F" "$real" >"$d/shasum"; chmod 755 "$d/shasum" ;;
+    sha256sum) printf '#!/bin/sh\necho "sha256sum $*" >>"%s/tool.log"\nexec "%s" -a 256 "$@"\n' "$F" "$real" >"$d/sha256sum"; chmod 755 "$d/sha256sum" ;;
+  esac
+}
+mkfix ck1; install_all; mkbin "$F/bin1" shasum; mkbin "$F/bin1b" sha256sum
+RUNPATH="$F/bin1"; run --check
+eq "R9 shasum clean" "$RC" 0
+hasline "R9 checksum_tool=shasum" "$OUT" "checksum_tool=shasum"
+contains "R9 shasum invoked with -a 256" "$(cat "$F/tool.log")" "shasum -a 256"
+# both present: shasum wins
+cp "$F/bin1b/sha256sum" "$F/bin1/sha256sum"; rm -f "$F/tool.log"; run --check
+hasline "R9 shasum preferred over sha256sum" "$OUT" "checksum_tool=shasum"
+lacks "R9 sha256sum not invoked when shasum works" "$(cat "$F/tool.log")" "sha256sum"
+# sha256sum fallback
+rm -f "$F/tool.log"; RUNPATH="$F/bin1b"; run --check
+eq "R9 sha256sum fallback clean" "$RC" 0
+hasline "R9 checksum_tool=sha256sum" "$OUT" "checksum_tool=sha256sum"
+contains "R9 sha256sum invoked" "$(cat "$F/tool.log")" "sha256sum"
+echo changed >"$CFG/agents/doctor.md"; run --check
+eq "R9 sha256sum detects drift" "$RC" 1
+eq "R9 sha256sum drift status" "$(status_of agents/doctor.md)" different
+# cksum fallback only when neither exists
+mkbin "$F/bin2" none; RUNPATH="$F/bin2"; run --check
+hasline "R9 checksum_tool=cksum" "$OUT" "checksum_tool=cksum"
+eq "R9 cksum detects drift" "$RC" 1
+eq "R9 cksum drift status" "$(status_of agents/doctor.md)" different
+eq "R9 cksum others in_sync" "$(count in_sync)" 12
+cp "$REPO/integrations/opencode/agents/doctor.md" "$CFG/agents/doctor.md"; run --check
+eq "R9 cksum clean when identical" "$RC" 0
+printf 'dummy agents/doctor.md v2\n' >"$CFG/agents/doctor.md"; run --check
+eq "R9 cksum detects same-length-class change" "$(status_of agents/doctor.md)" different
+cp "$REPO/integrations/opencode/agents/doctor.md" "$CFG/agents/doctor.md"
+chmod 644 "$CFG/scripts/doctor.sh"; run --check
+eq "R9 exec-bit drift independent of checksum" "$(status_of scripts/doctor.sh)" different
+hasline "R9 would_chmod under cksum" "$OUT" "would_chmod=scripts/doctor.sh"
+RUNPATH="$F/bin2"; run --apply
+eq "R9 apply works under restricted PATH (cksum)" "$RC" 0
+eq "R9 chmod applied" "$(ls -l "$CFG/scripts/doctor.sh" | cut -c1-10)" "-rwxr-xr-x"
+mkfix ck2; mkbin "$F/bin3" sha256sum; RUNPATH="$F/bin3"; run --apply
+eq "R9 full apply under sha256sum-only PATH" "$RC" 0
+eq "R9 installed bytes match" "$(fsum "$CFG/agents/doctor.md")" "$(fsum "$REPO/integrations/opencode/agents/doctor.md")"
+# unreadable installed file => fail closed, never in_sync
+mkfix ck3; install_all; chmod 000 "$CFG/agents/doctor.md"; run --check
+chmod 644 "$CFG/agents/doctor.md"
+eq "R9 unreadable installed file fails closed" "$RC" 2
+hasline "R9 unreadable => DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+
+# Static: after staging, repository source paths are never reopened
+post=$(sed -n '/^run_hook after_staging$/,$p' "$SCRIPT_UNDER_TEST" | grep -v '^[[:space:]]*#')
+if printf '%s\n' "$post" | grep -Eq '\$SRC|\$ROOT|\$SELF_DIR'; then bad "static: repo source referenced after staging"; else ok "static: no repo source reference after staging"; fi
+if printf '%s\n' "$post" | grep -q dest_safe; then ok "static: post-staging section located"; else bad "static: post-staging section not found"; fi
+if grep -v '^[[:space:]]*#' "$SCRIPT_UNDER_TEST" | grep -q 'cmp '; then bad "static: cmp still used"; else ok "static: cmp not used for drift"; fi
 
 # Static: helper contains no forbidden constructs
 bodyfile="$SCRIPT_UNDER_TEST"
