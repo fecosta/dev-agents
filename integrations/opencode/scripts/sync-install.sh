@@ -15,9 +15,10 @@
 # Source snapshot: preflight validates every manifest source (regular, readable, non-symlink,
 # physically inside the checkout) and copies its bytes into a private staging dir (mktemp -d under
 # $TMPDIR or /tmp, mode 700, files 600). For every staged file the checksum, device:inode identity
-# and physical parent are recorded, plus the identity of the staging root. Drift detection and all
-# destination writes use ONLY the staged copies; repository source paths are never reopened after
-# staging. Immediately before a staged file is read for a destination write, the staging root, the
+# and physical parent are recorded, plus the identity of the staging root and of each staging
+# subdir. Drift detection and all destination writes use ONLY the staged copies; repository source
+# paths are never reopened after staging. Immediately before a staged file is read for a destination
+# write, the staging root, the staging subdir (not a symlink, physical path, same identity), the
 # staged file (regular, non-symlink, same identity, same parent) and its checksum are re-verified;
 # any mismatch => reason=SOURCE_FILE_UNSAFE and nothing from that item is written. The checksum of
 # the finished temp file is compared with the staged checksum before the final mv, so the installed
@@ -83,6 +84,7 @@ SUBDIRS="agents commands scripts"
 MODE=""
 TMPF=""; TMPID=""; TMPPAR=""   # current temp file, its device:inode identity, its physical parent
 STG=""; STGP=""; STGID=""      # staging dir (as created), physical path, identity
+SGID_agents=""; SGID_commands=""; SGID_scripts=""   # identity of each staging subdir
 SUM=()                         # staged checksum per manifest index
 SID=()                         # staged file identity per manifest index
 DFID=()                        # installed file identity per manifest index at plan time ("" = absent)
@@ -91,15 +93,15 @@ DID_agents=""; DID_commands=""; DID_scripts=""
 HOMEPHYS=""; HOMEID=""
 
 # TEST-ONLY hook (not part of the product interface): when DEV_AGENTS_SYNC_TEST_HOOK is an absolute
-# path to an executable regular file it is run as "<hook> <phase> <manifest-entry>" with stdin
-# </dev/null and all output discarded; its exit status is ignored. It gets read-only labels only
-# and cannot influence decisions: every safety check runs AFTER the hook against live filesystem
-# state. Phases: after_staging before_mkdir before_mktemp before_tmp_write before_stage_read
-# before_tmp_chmod before_mv before_chmod before_cleanup.
+# path to an executable regular file that is NOT a symlink it is run as "<hook> <phase>
+# <manifest-entry>" with stdin </dev/null and all output discarded; its exit status is ignored. It
+# gets read-only labels only and cannot influence decisions: every safety check runs AFTER the hook
+# against live filesystem state. Phases: after_staging before_mkdir before_mktemp before_tmp_write
+# before_stage_read before_tmp_chmod before_mv before_chmod before_cleanup.
 run_hook() { # <phase> [manifest entry]
   local h="${DEV_AGENTS_SYNC_TEST_HOOK:-}"
   case "$h" in /*) ;; *) return 0 ;; esac
-  if [ -f "$h" ] && [ -x "$h" ]; then "$h" "$1" "${2:-}" </dev/null >/dev/null 2>&1 || true; fi
+  if [ ! -L "$h" ] && [ -f "$h" ] && [ -x "$h" ]; then "$h" "$1" "${2:-}" </dev/null >/dev/null 2>&1 || true; fi
   return 0
 }
 
@@ -138,6 +140,22 @@ stg_root_ok() {
   [ "$i" = "$STGID" ]
 }
 
+get_sgid() { case "$1" in agents) printf '%s' "$SGID_agents" ;; commands) printf '%s' "$SGID_commands" ;; scripts) printf '%s' "$SGID_scripts" ;; esac; }
+set_sgid() { case "$1" in agents) SGID_agents="$2" ;; commands) SGID_commands="$2" ;; scripts) SGID_scripts="$2" ;; esac; }
+
+# staging subdir: root ok, subdir not a symlink, physically STGP/<subdir>, identity as recorded
+stg_dir_ok() { # <subdir>
+  local d="$1" p i want
+  want=$(get_sgid "$d")
+  [ -n "$want" ] || return 1
+  stg_root_ok || return 1
+  [ ! -L "$STGP/$d" ] && [ -d "$STGP/$d" ] || return 1
+  p=$(phys_of "$STGP/$d") || return 1
+  [ "$p" = "$STGP/$d" ] || return 1
+  i=$(ident_of "$STGP/$d") || return 1
+  [ "$i" = "$want" ]
+}
+
 # --- cleanup: identity-checked, non-recursive, never changes the exit code ---------------------
 
 cleanup() {
@@ -146,16 +164,18 @@ cleanup() {
   if [ -n "$TMPF" ] || [ -n "$STGP" ]; then run_hook before_cleanup; fi
   # own temp file only: same parent, still a regular non-symlink file, same identity as at creation
   if [ -n "$TMPF" ] && file_ok "$TMPF" "$TMPPAR" "$TMPID"; then rm -f -- "$TMPF" 2>/dev/null; fi
-  # Remove ONLY what this run staged: the exact manifest files (each verified), then the (empty) dirs.
+  # Remove ONLY what this run staged: the exact manifest files (each verified, inside a staging root
+  # and subdir that still have the recorded identity), then the (empty) dirs that still match.
+  # Replaced/foreign content is left alone; rmdir of a non-empty dir fails harmlessly.
   if stg_root_ok; then
     k=0
     while [ "$k" -lt "${#MANIFEST[@]}" ]; do
       e="${MANIFEST[$k]}"
-      if file_ok "$STGP/$e" "$STGP/${e%%/*}" "${SID[$k]:-}"; then rm -f -- "$STGP/$e" 2>/dev/null; fi
+      if stg_dir_ok "${e%%/*}" && file_ok "$STGP/$e" "$STGP/${e%%/*}" "${SID[$k]:-}"; then rm -f -- "$STGP/$e" 2>/dev/null; fi
       k=$((k + 1))
     done
-    for m in $SUBDIRS; do rmdir -- "$STGP/$m" 2>/dev/null; done
-    rmdir -- "$STGP" 2>/dev/null
+    for m in $SUBDIRS; do if stg_dir_ok "$m"; then rmdir -- "$STGP/$m" 2>/dev/null; fi; done
+    if stg_root_ok; then rmdir -- "$STGP" 2>/dev/null; fi
   fi
   exit "$rc"
 }
@@ -334,12 +354,13 @@ ck() { # <file>: print the comparable digest (sha-256 hex, or "crc size" for cks
   fi
 }
 
-# Staged copy still exactly what preflight recorded: staging root identity, regular non-symlink file,
-# same parent and identity, same checksum (same CKTOOL).
+# Staged copy still exactly what preflight recorded: staging root identity, staging subdir identity,
+# regular non-symlink file, same parent and identity, same checksum (same CKTOOL).
 stage_ok() { # <manifest index>
   local k="$1" e s
   e="${MANIFEST[$k]}"
   stg_root_ok || return 1
+  stg_dir_ok "${e%%/*}" || return 1
   file_ok "$STGP/$e" "$STGP/${e%%/*}" "${SID[$k]:-}" || return 1
   s=$(ck "$STGP/$e") || return 1
   [ "$s" = "${SUM[$k]:-}" ]
@@ -357,7 +378,13 @@ p=$(phys_of "$STG") || stg_abort "cannot resolve staging dir"
 id=$(ident_of "$p") || stg_abort "cannot identify staging dir"
 STGP="$p"; STGID="$id"
 chmod 700 "$STGP" || fail COPY_FAILED "cannot secure staging dir"
-for d in $SUBDIRS; do mkdir -m 700 "$STGP/$d" 2>/dev/null || fail COPY_FAILED "cannot create staging dir"; done
+for d in $SUBDIRS; do
+  mkdir -m 700 "$STGP/$d" 2>/dev/null || fail COPY_FAILED "cannot create staging dir"
+  p=$(phys_of "$STGP/$d") || fail COPY_FAILED "cannot resolve staging subdir"
+  [ "$p" = "$STGP/$d" ] || fail SOURCE_FILE_UNSAFE "staging subdir $d resolves elsewhere"
+  id=$(ident_of "$STGP/$d") || fail COPY_FAILED "cannot identify staging subdir"
+  set_sgid "$d" "$id"
+done
 
 N=${#MANIFEST[@]}
 i=0
@@ -370,6 +397,7 @@ while [ "$i" -lt "$N" ]; do
   [ "$physdir" = "$SRC/${e%%/*}" ] || fail SOURCE_FILE_MISSING "$e"
   ino1=$(ident_of "$s") || fail SOURCE_FILE_UNSAFE "$e"
   # snapshot: from here on only the staged copy is used
+  stg_dir_ok "${e%%/*}" || fail SOURCE_FILE_UNSAFE "$e staging dir changed"
   (umask 077; cat -- "$s" 2>/dev/null >"$STGP/$e") || fail SOURCE_FILE_UNSAFE "$e cannot be snapshotted"
   # identity recorded first so cleanup can remove this file even if a later step fails
   SID[$i]=$(ident_of "$STGP/$e") || fail SOURCE_FILE_UNSAFE "$e staged identity"
@@ -381,6 +409,7 @@ while [ "$i" -lt "$N" ]; do
     fail SOURCE_FILE_UNSAFE "$e changed while snapshotting"
   fi
   # record the staged file's identity and checksum: from here the staged copy is the source of truth
+  stg_dir_ok "${e%%/*}" && file_ok "$STGP/$e" "$STGP/${e%%/*}" "${SID[$i]}" || fail SOURCE_FILE_UNSAFE "$e staged copy changed"
   SUM[$i]=$(ck "$STGP/$e") || fail COPY_FAILED "checksum of staged $e"
   i=$((i + 1))
 done

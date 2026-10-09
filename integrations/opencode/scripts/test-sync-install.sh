@@ -773,6 +773,107 @@ H
 OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
 eq "S5d success exit 0 survives cleanup trouble" "$RC" 0
 
+# S7 (finding 1): hook must not be a symlink
+mkfix s7a
+mkhook mark "echo ran >\"$F/marker\"; exit 0"
+HK_REAL="$HOOK"; HK_LINK="$F/hook-link.sh"; ln -s "$HK_REAL" "$HK_LINK"
+hh=$(fsum "$HK_REAL")
+HOOK="$HK_LINK"; run --apply
+eq "S7a symlinked hook: run otherwise normal" "$RC" 0
+eq "S7a symlinked hook not executed (no marker)" "$(test -e "$F/marker" && echo yes || echo no)" no
+eq "S7a symlink target untouched" "$(fsum "$HK_REAL")" "$hh"
+eq "S7a symlink itself untouched" "$(readlink "$HK_LINK")" "$HK_REAL"
+HOOK="$HK_REAL"; run --check
+eq "S7a regular absolute hook still runs" "$(test -e "$F/marker" && echo yes || echo no)" yes
+rm -f "$F/marker"
+chmod 644 "$HK_REAL"; HOOK="$HK_REAL"; run --check
+eq "S7a non-executable hook not run" "$(test -e "$F/marker" && echo yes || echo no)" no
+chmod 755 "$HK_REAL"; cp "$HK_REAL" "$TMP/cwd/relmark.sh"; HOOK="relmark.sh"; run --check
+rm -f "$TMP/cwd/relmark.sh"
+eq "S7a relative hook not run" "$(test -e "$F/marker" && echo yes || echo no)" no
+HOOK=""; run --check
+eq "S7a unset hook not run" "$(test -e "$F/marker" && echo yes || echo no)" no
+
+# S8 (finding 2): staging subdirectory identity
+runtmp() { # run --apply with TMPDIR=$F/tmpd and the current HOOK (staging is observable)
+  OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" "$@" 2>&1 </dev/null); RC=$?
+}
+# S8a: staging/commands moved away and recreated at the same path
+mkfix s8a; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = commands/implement-spec.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s/commands" "\$s/commands.old" && mkdir "\$s/commands"; done
+exit 0
+H
+runtmp --apply
+eq "S8a replaced staging subdir: exit 2" "$RC" 2
+hasline "S8a SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+eq "S8a no commands bytes written to destination" "$(test -e "$CFG/commands/implement-spec.md" && echo yes || echo no)" no
+eq "S8a no staged bytes anywhere in HOME" "$(grep -rl 'dummy commands/implement-spec.md' "$HM" | wc -l | tr -d ' ')" 0
+# S8b: same, plus the original staged file hard-linked into the replacement (file identity, checksum
+# and physical parent all match; only the subdir identity differs)
+mkfix s8b; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = commands/implement-spec.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s/commands" "\$s/commands.old" && mkdir "\$s/commands" && ln "\$s/commands.old/implement-spec.md" "\$s/commands/implement-spec.md"; done
+exit 0
+H
+runtmp --apply
+eq "S8b hard-linked file in replacement dir: exit 2" "$RC" 2
+hasline "S8b SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+eq "S8b hard link really existed" "$(for s in "$F"/tmpd/sync-install.*; do test -e "$s/commands/implement-spec.md" && echo yes; done)" yes
+eq "S8b no commands bytes written to destination" "$(test -e "$CFG/commands/implement-spec.md" && echo yes || echo no)" no
+eq "S8b no staged bytes anywhere in HOME" "$(grep -rl 'dummy commands/implement-spec.md' "$HM" | wc -l | tr -d ' ')" 0
+# S8c: symlink in place of a staging subdir (pointing at a dir holding the same file)
+mkfix s8c; mkdir "$F/tmpd" "$F/elsewhere"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = scripts/review-route.sh ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do cp "\$s/scripts/review-route.sh" "$F/elsewhere/" && mv "\$s/scripts" "\$s/scripts.old" && ln -s "$F/elsewhere" "\$s/scripts"; done
+exit 0
+H
+runtmp --apply
+eq "S8c symlinked staging subdir: exit 2" "$RC" 2
+hasline "S8c SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+eq "S8c script not installed" "$(test -e "$CFG/scripts/review-route.sh" && echo yes || echo no)" no
+eq "S8c elsewhere dir untouched (only the copy)" "$(ls -A "$F/elsewhere")" review-route.sh
+# S8d: cleanup with a replaced staging subdir leaves foreign files/dirs, exit code preserved (success run)
+mkfix s8d; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_cleanup ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s/scripts" "\$s/scripts.old" && mkdir "\$s/scripts" && echo FOREIGN >"\$s/scripts/foreign.txt" && mkdir "\$s/scripts/fdir" && echo F2 >"\$s/scripts/fdir/x"; done
+exit 0
+H
+runtmp --apply
+eq "S8d success exit 0 preserved" "$RC" 0
+eq "S8d foreign file in replaced subdir survives" "$(cat "$F"/tmpd/sync-install.*/scripts/foreign.txt 2>/dev/null)" FOREIGN
+eq "S8d foreign nested dir content survives" "$(cat "$F"/tmpd/sync-install.*/scripts/fdir/x 2>/dev/null)" F2
+eq "S8d files of the moved original subdir not deleted" "$(ls "$F"/tmpd/sync-install.*/scripts.old | wc -l | tr -d ' ')" 4
+eq "S8d intact subdirs were cleaned (agents gone)" "$(for s in "$F"/tmpd/sync-install.*; do test -e "$s/agents" && echo yes; done)" ""
+rm -rf "$F/tmpd"
+# S8e: same replacement on a failing run: exit code 2 preserved, foreign content survives
+mkfix s8e; mkdir "$F/tmpd"; install_all; echo x >"$CFG/agents/doctor.md"
+hookraw <<H
+[ "\$1" = before_cleanup ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s/commands" "\$s/commands.old" && mkdir "\$s/commands" && echo FOREIGN >"\$s/commands/foreign.txt"; done
+exit 0
+H
+rm "$REPO/integrations/opencode/commands/split-spec.md"
+runtmp --apply
+eq "S8e failing exit 2 preserved" "$RC" 2
+hasline "S8e reason unchanged" "$OUT" "reason=SOURCE_FILE_MISSING"
+eq "S8e foreign file survives" "$(cat "$F"/tmpd/sync-install.*/commands/foreign.txt 2>/dev/null)" FOREIGN
+rm -rf "$F/tmpd"
+mkfix s8f; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_cleanup ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s/commands" "\$s/commands.old" && mkdir "\$s/commands" && echo FOREIGN >"\$s/commands/foreign.txt"; done
+exit 0
+H
+runtmp --check
+eq "S8f check run (empty install): exit 1 preserved" "$RC" 1
+eq "S8f foreign file survives" "$(cat "$F"/tmpd/sync-install.*/commands/foreign.txt 2>/dev/null)" FOREIGN
+rm -rf "$F/tmpd"
+
 # S6: hook labels and the exact per-file order
 mkfix s6; install_all; echo x >"$CFG/agents/doctor.md"; chmod 644 "$CFG/scripts/review-route.sh"; rm -rf "$CFG/commands"
 mkhook log "echo \"\$1 \$2\" >>\"$F/hook.log\""
