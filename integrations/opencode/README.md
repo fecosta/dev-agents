@@ -172,6 +172,8 @@ cp integrations/opencode/scripts/resolve-model-family.sh integrations/opencode/s
 
 **Limitations:** the doctor does not validate volatile upstream models behind the 9Router aliases or live 9Router connectivity; the fixture smoke tests are not the full suites (run `test-resolve-model-family.sh`, `test-review-route.sh` and `test-doctor.sh` from the checkout for those). The usage-history window limitation described above is unchanged. Tests: `integrations/opencode/scripts/test-doctor.sh` (bash 3.2+; temporary HOME, config and DB only).
 
+Run /doctor after updating the installed OpenCode integration to verify the environment remains healthy.
+
 ## First test
 
 Use a harmless docs-only task in a clean or understood working tree:
