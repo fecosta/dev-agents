@@ -549,6 +549,241 @@ chmod 644 "$CFG/agents/doctor.md"
 eq "R9 unreadable installed file fails closed" "$RC" 2
 hasline "R9 unreadable => DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
 
+# --- v3c.2 round 2: directory creation, temp file, staged integrity, cleanup (deterministic hooks) ---
+hookraw() { HOOK="$F/hook-raw.sh"; { echo '#!/bin/sh'; cat; } >"$HOOK"; chmod 755 "$HOOK"; } # body on stdin (unquoted heredoc)
+nfiles() { find "$1" -mindepth 1 | wc -l | tr -d ' '; }
+
+# S1 (HIGH 1): directory creation is revalidated, one level at a time
+mkfix s1a; mkdir "$F/outside"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = agents ] && ln -s "$F/outside" "$CFG/agents"
+exit 0
+H
+run --apply
+eq "S1a subdir appears as symlink: exit 2" "$RC" 2
+hasline "S1a DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1a outside unchanged" "$(nfiles "$F/outside")" 0
+eq "S1a nothing installed" "$(find "$HM" -name '*.md' | wc -l | tr -d ' ')" 0
+mkfix s1b; mkdir "$F/outside"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = commands ] && mv "$CFG" "$F/movedcfg" && ln -s "$F/outside" "$CFG"
+exit 0
+H
+run --apply
+eq "S1b root swapped for symlink: exit 2" "$RC" 2
+hasline "S1b DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1b outside unchanged" "$(nfiles "$F/outside")" 0
+eq "S1b no later subdir created in moved root" "$(test -e "$F/movedcfg/commands" && echo yes || echo no)" no
+mkfix s1c; mkdir "$F/outside"; rm -rf "$HM/.config"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = .config ] && ln -s "$F/outside" "$HM/.config"
+exit 0
+H
+run --apply
+eq "S1c .config appears as symlink: exit 2" "$RC" 2
+hasline "S1c DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1c outside unchanged" "$(nfiles "$F/outside")" 0
+mkfix s1d; mkdir "$F/outside"; rm -rf "$HM/.config"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = opencode ] && mv "$HM/.config" "$F/oldcfg" && ln -s "$F/outside" "$HM/.config"
+exit 0
+H
+run --apply
+eq "S1d .config swapped for symlink after validation: exit 2" "$RC" 2
+hasline "S1d DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1d outside unchanged (no mkdir through link)" "$(nfiles "$F/outside")" 0
+mkfix s1e; rm -rf "$HM/.config"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = opencode ] && mv "$HM/.config" "$F/oldcfg" && mkdir "$HM/.config"
+exit 0
+H
+run --apply
+eq "S1e .config replaced by another dir: exit 2" "$RC" 2
+hasline "S1e DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1e replacement .config left empty" "$(nfiles "$HM/.config")" 0
+mkfix s1f; rm -rf "$HM/.config"
+hookraw <<H
+[ "\$1" = before_mkdir ] && [ "\$2" = agents ] && mv "$HM/.config" "$F/oldcfg" && ln -s "$F/oldcfg" "$HM/.config"
+exit 0
+H
+run --apply
+eq "S1f ancestor swapped after root creation: exit 2" "$RC" 2
+hasline "S1f DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S1f nothing installed" "$(find "$F/oldcfg" -name '*.md' | wc -l | tr -d ' ')" 0
+mkfix s1g; rm -rf "$HM/.config"; run --apply
+eq "S1g clean creation of root and subdirs" "$RC" 0
+eq "S1g root created" "$(test -d "$CFG/scripts" && echo yes)" yes
+
+# S2 (HIGH 2): validation immediately before mv; swaps in before_mv never reach mv
+mkfix s2a; install_all; echo changed >"$CFG/agents/doctor.md"
+hookraw <<H
+[ "\$1" = before_mv ] && [ "\$2" = agents/doctor.md ] && rm -f "$CFG/agents/doctor.md" && mkdir "$CFG/agents/doctor.md"
+exit 0
+H
+run --apply
+eq "S2a file->directory swap: exit 2" "$RC" 2
+hasline "S2a DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S2a destination stayed a directory" "$(test -d "$CFG/agents/doctor.md" && echo yes)" yes
+eq "S2a nothing placed inside it" "$(nfiles "$CFG/agents/doctor.md")" 0
+mkfix s2b; install_all; echo changed >"$CFG/agents/doctor.md"
+hookraw <<H
+[ "\$1" = before_mv ] && [ "\$2" = agents/doctor.md ] && mv "$CFG/agents" "$F/oldagents" && mkdir "$CFG/agents"
+exit 0
+H
+run --apply
+eq "S2b directory swap: exit 2" "$RC" 2
+hasline "S2b DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S2b new directory untouched" "$(nfiles "$CFG/agents")" 0
+mkfix s2c; install_all; echo changed >"$CFG/agents/doctor.md"
+hookraw <<H
+[ "\$1" = before_mv ] && [ "\$2" = agents/doctor.md ] && echo OTHER >"$CFG/agents/doctor.new" && mv "$CFG/agents/doctor.new" "$CFG/agents/doctor.md"
+exit 0
+H
+run --apply
+eq "S2c regular file replaced (new identity): exit 2" "$RC" 2
+hasline "S2c DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S2c replacement not overwritten" "$(cat "$CFG/agents/doctor.md")" OTHER
+mkfix s2d; install_all; echo changed >"$CFG/agents/doctor.md"; mkdir "$F/outside"
+hookraw <<H
+[ "\$1" = before_mv ] && [ "\$2" = agents/doctor.md ] && mv "$CFG" "$F/movedcfg" && ln -s "$F/movedcfg" "$CFG"
+exit 0
+H
+run --apply
+eq "S2d root swapped for symlink at mv: exit 2" "$RC" 2
+hasline "S2d DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S2d old content kept" "$(cat "$F/movedcfg/agents/doctor.md")" changed
+# chmod-only: replaced by a new regular file (identity change) before chmod
+mkfix s2e; install_all; chmod 644 "$CFG/scripts/review-route.sh"
+hookraw <<H
+[ "\$1" = before_chmod ] && [ "\$2" = scripts/review-route.sh ] && cp "$CFG/scripts/review-route.sh" "$CFG/scripts/rr.new" && mv "$CFG/scripts/rr.new" "$CFG/scripts/review-route.sh"
+exit 0
+H
+run --apply
+eq "S2e chmod target identity changed: exit 2" "$RC" 2
+hasline "S2e DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S2e replacement not chmodded" "$(ls -l "$CFG/scripts/review-route.sh" | cut -c1-10)" "-rw-r--r--"
+
+# S3 (HIGH 3): temp file swapped to a symlink before the write / before the chmod
+for ph in before_tmp_write before_tmp_chmod; do
+  mkfix s3_$ph; install_all; echo changed >"$CFG/commands/route-task.md"
+  echo precious >"$F/outside.txt"; chmod 600 "$F/outside.txt"; oh=$(fsum "$F/outside.txt")
+  hookraw <<H
+[ "\$1" = $ph ] && [ "\$2" = commands/route-task.md ] || exit 0
+for t in "$CFG"/commands/.sync-install.*; do rm -f "\$t"; ln -s "$F/outside.txt" "\$t"; done
+exit 0
+H
+  run --apply
+  eq "S3 $ph exit 2" "$RC" 2
+  hasline "S3 $ph DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+  eq "S3 $ph external content untouched" "$(fsum "$F/outside.txt")" "$oh"
+  eq "S3 $ph external mode untouched" "$(ls -l "$F/outside.txt" | cut -c1-10)" "-rw-------"
+  eq "S3 $ph destination file not replaced" "$(cat "$CFG/commands/route-task.md")" changed
+  nline "S3 $ph nothing reported copied" "$OUT" "copied=commands/route-task.md"
+done
+
+# S4 (HIGH 4): staged snapshot is the source of truth and is verified right before it is read
+mkfix s4a; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = agents/doctor.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*/agents/doctor.md; do echo TAMPERED >>"\$s"; done
+exit 0
+H
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S4a tampered staged bytes: exit 2" "$RC" 2
+hasline "S4a SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+eq "S4a tampered bytes never installed" "$(grep -rl TAMPERED "$HM" | wc -l | tr -d ' ')" 0
+eq "S4a no destination file for that item" "$(test -e "$CFG/agents/doctor.md" && echo yes || echo no)" no
+eq "S4a staging removed" "$(tcount "$F/tmpd")" 0
+mkfix s4b; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = agents/doctor.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*/agents/doctor.md; do cp "\$s" "\$s.new" && mv "\$s.new" "\$s"; done
+exit 0
+H
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S4b staged file replaced (same bytes, new identity): exit 2" "$RC" 2
+hasline "S4b SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+mkfix s4c; mkdir "$F/tmpd"; echo "EXTERNAL-STAGED" >"$F/ext.md"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = agents/doctor.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*/agents/doctor.md; do rm -f "\$s"; ln -s "$F/ext.md" "\$s"; done
+exit 0
+H
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S4c staged symlink swap: exit 2" "$RC" 2
+hasline "S4c SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+eq "S4c external bytes never installed" "$(grep -rl EXTERNAL-STAGED "$HM" | wc -l | tr -d ' ')" 0
+eq "S4c external file intact" "$(cat "$F/ext.md")" "EXTERNAL-STAGED"
+mkfix s4d; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_stage_read ] && [ "\$2" = agents/doctor.md ] || exit 0
+for s in "$F"/tmpd/sync-install.*; do mv "\$s" "\$s.old" && mkdir "\$s"; done
+exit 0
+H
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S4d staging root swapped: exit 2" "$RC" 2
+hasline "S4d SOURCE_FILE_UNSAFE" "$OUT" "reason=SOURCE_FILE_UNSAFE"
+
+# S5 (MEDIUM 5): cleanup never deletes foreign files and never changes the exit code
+mkfix s5a; install_all; echo changed >"$CFG/agents/doctor.md"; echo external >"$F/outside.txt"
+hookraw <<H
+case "\$1" in
+  before_mv) rm -f "$CFG/agents/doctor.md" && ln -s "$F/outside.txt" "$CFG/agents/doctor.md" ;;
+  before_cleanup) for t in "$CFG"/agents/.sync-install.*; do echo FOREIGN >"$F/repl" && mv "$F/repl" "\$t"; done ;;
+esac
+exit 0
+H
+run --apply
+eq "S5a exit stays 2" "$RC" 2
+hasline "S5a DESTINATION_UNSAFE" "$OUT" "reason=DESTINATION_UNSAFE"
+eq "S5a unrelated file at the temp path survives cleanup" "$(cat "$CFG"/agents/.sync-install.* 2>/dev/null)" FOREIGN
+mkfix s5b; install_all; echo changed >"$CFG/agents/doctor.md"; echo external >"$F/outside.txt"; chmod 600 "$F/outside.txt"; oh=$(fsum "$F/outside.txt")
+hookraw <<H
+case "\$1" in
+  before_mv) rm -f "$CFG/agents/doctor.md" && ln -s "$F/outside.txt" "$CFG/agents/doctor.md" ;;
+  before_cleanup) for t in "$CFG"/agents/.sync-install.*; do rm -f "\$t"; ln -s "$F/outside.txt" "\$t"; done ;;
+esac
+exit 0
+H
+run --apply
+eq "S5b exit stays 2" "$RC" 2
+eq "S5b symlink target not deleted" "$(test -f "$F/outside.txt" && echo yes)" yes
+eq "S5b symlink target content untouched" "$(fsum "$F/outside.txt")" "$oh"
+eq "S5b symlink target mode untouched" "$(ls -l "$F/outside.txt" | cut -c1-10)" "-rw-------"
+eq "S5b symlink left in place (not followed, not removed)" "$(for t in "$CFG"/agents/.sync-install.*; do test -L "$t" && echo link; done)" link
+# a swapped staged file / staging root is not removed through the swap either
+mkfix s5c; mkdir "$F/tmpd"; echo changed >"$CFG/x" 2>/dev/null; install_all; echo changed >"$CFG/agents/doctor.md"
+hookraw <<H
+case "\$1" in
+  before_mv) rm -f "$CFG/agents/doctor.md" && ln -s "$F/ext.md" "$CFG/agents/doctor.md" ;;
+  before_cleanup) for s in "$F"/tmpd/sync-install.*/commands/doctor.md; do echo FOREIGN >"$F/repl" && mv "$F/repl" "\$s"; done ;;
+esac
+exit 0
+H
+echo ext >"$F/ext.md"
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S5c exit stays 2" "$RC" 2
+eq "S5c foreign file in staging survives cleanup" "$(cat "$F"/tmpd/sync-install.*/commands/doctor.md 2>/dev/null)" FOREIGN
+# cleanup trouble must not change the exit code (staging tree removed from under the script)
+mkfix s5d; mkdir "$F/tmpd"
+hookraw <<H
+[ "\$1" = before_cleanup ] && { for s in "$F"/tmpd/sync-install.*; do find "\$s" -type f -exec rm -f {} + ; find "\$s" -depth -type d -exec rmdir {} + ; done; }
+exit 0
+H
+OUT=$(cd "$TMP/cwd" && env -i HOME="$HM" PATH="$REAL_PATH" TMPDIR="$F/tmpd" DEV_AGENTS_SYNC_TEST_HOOK="$HOOK" "$BASH_BIN" "$SYNC" --apply 2>&1 </dev/null); RC=$?
+eq "S5d success exit 0 survives cleanup trouble" "$RC" 0
+
+# S6: hook labels and the exact per-file order
+mkfix s6; install_all; echo x >"$CFG/agents/doctor.md"; chmod 644 "$CFG/scripts/review-route.sh"; rm -rf "$CFG/commands"
+mkhook log "echo \"\$1 \$2\" >>\"$F/hook.log\""
+run --apply
+eq "S6 exit 0" "$RC" 0
+for lb in after_staging before_mkdir before_mktemp before_tmp_write before_tmp_chmod before_mv before_chmod before_stage_read before_cleanup; do
+  contains "S6 label $lb fired" "$(cat "$F/hook.log")" "$lb"
+done
+eq "S6 per-file order" "$(grep ' agents/doctor.md$' "$F/hook.log" | awk '{printf "%s ", $1}')" "before_mktemp before_tmp_write before_stage_read before_tmp_chmod before_mv "
+eq "S6 mkdir hook precedes every mktemp" "$(awk '$1=="before_mkdir"{m=NR} $1=="before_mktemp"&&!f{f=NR} END{print (m<f)?"ok":"bad"}' "$F/hook.log")" ok
+
 # Static: after staging, repository source paths are never reopened
 post=$(sed -n '/^run_hook after_staging$/,$p' "$SCRIPT_UNDER_TEST" | grep -v '^[[:space:]]*#')
 if printf '%s\n' "$post" | grep -Eq '\$SRC|\$ROOT|\$SELF_DIR'; then bad "static: repo source referenced after staging"; else ok "static: no repo source reference after staging"; fi
@@ -558,6 +793,14 @@ if grep -v '^[[:space:]]*#' "$SCRIPT_UNDER_TEST" | grep -q 'cmp '; then bad "sta
 # Static: helper contains no forbidden constructs
 bodyfile="$SCRIPT_UNDER_TEST"
 code=$(grep -v '^[[:space:]]*#' "$bodyfile")
+if printf '%s\n' "$code" | grep -Eq 'mkdir( +-[a-z]*)* *-p|mkdir +-[A-Za-z]*p'; then bad "static: mkdir -p used"; else ok "static: no mkdir -p"; fi
+if printf '%s\n' "$code" | grep -Eq 'rm +-[A-Za-z]*[rR]'; then bad "static: recursive rm used"; else ok "static: no recursive rm"; fi
+for lb in after_staging before_mkdir before_mktemp before_tmp_write before_tmp_chmod before_mv before_chmod before_stage_read before_cleanup; do
+  if printf '%s\n' "$code" | grep -q "run_hook $lb"; then ok "static: hook $lb present"; else bad "static: hook $lb missing"; fi
+done
+# the mv is directly preceded by its two validators (only comments/variable work in between)
+mvblk=$(printf '%s\n' "$code" | grep -B2 'mv -f -- "\$TMPF"' | head -n 2)
+if printf '%s\n' "$mvblk" | sed -n 1p | grep -q 'dest_safe' && printf '%s\n' "$mvblk" | sed -n 2p | grep -q 'file_ok'; then ok "static: mv directly preceded by dest and temp validation"; else bad "static: mv validation order"; fi
 for pat in '\bgit\b' 'rsync' 'cp -r' 'cp -R' 'sqlite' 'opencode\.json' '9router' '\brm -r'; do
   if printf '%s\n' "$code" | grep -Eq -- "$pat"; then bad "static: helper code contains /$pat/"; else ok "static: no /$pat/ in helper code"; fi
 done
