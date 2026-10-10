@@ -2,6 +2,8 @@
 
 Reusable orchestration contracts for capability-based AI development workflows with OpenCode, 9Router, and Headroom.
 
+Product definition: [docs/PRODUCT.md](docs/PRODUCT.md).
+
 ## Capability aliases
 - `economy`
 - `standard`
