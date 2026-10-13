@@ -934,7 +934,7 @@ if [ -f "$HF" ]; then
   for h in "Completed unit:" "Validation:" "Repository state:" "Changed areas:" "Unresolved:" "Next fresh-session task:"; do
     contains "handoff section $h" "$hf" "$h"
   done
-  for t in "Never push" "merge" "rewrite Git history" "co-author" "Conventional Commits" "solely to produce a handoff" "Never claim tests passed" "not independent review" "Do not start it"; do
+  for t in "Never push, merge, deploy, force-push, rewrite Git history" "Add no AI co-author trailers" "Conventional Commits" "solely to produce a handoff" "Never claim tests passed" "not independent review" "Do not start it"; do
     contains "handoff safety text: $t" "$hf" "$t"
   done
 else
