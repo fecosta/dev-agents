@@ -28,9 +28,9 @@ SECRET_CFG="SENTINEL-CONFIG-SECRET-4d2e"
 SECRET_ENV="SENTINEL-ENV-SECRET-8b1c"
 
 MANIFEST="agents/orchestrator.md agents/doctor.md agents/sync-install.md
-commands/implement-spec.md commands/route-task.md commands/review-change.md commands/split-spec.md commands/doctor.md commands/sync-install.md
+commands/implement-spec.md commands/route-task.md commands/review-change.md commands/split-spec.md commands/doctor.md commands/sync-install.md commands/handoff.md
 scripts/review-route.sh scripts/resolve-model-family.sh scripts/doctor.sh scripts/sync-install.sh"
-NMAN=13
+NMAN=14
 
 F=""; REPO=""; HM=""; CFG=""; HOOK=""; RUNPATH="$REAL_PATH"
 stub_doctor() { # <mode: pass|warn|fail|exit127|empty>
@@ -106,7 +106,7 @@ mkfix a; install_all; before=$(snap "$F")
 run --check
 eq "A exit 0" "$RC" 0
 hasline "A sync_status=clean" "$OUT" "sync_status=clean"
-eq "A in_sync=13" "$(count in_sync)" 13
+eq "A in_sync=14" "$(count in_sync)" "$NMAN"
 eq "A tree unchanged" "$(snap "$F")" "$before"
 eq "A first file status" "$(status_of agents/orchestrator.md)" in_sync
 
@@ -174,7 +174,7 @@ run --check
 eq "G exit 1" "$RC" 1
 eq "G missing=2" "$(count missing)" 2
 eq "G different=1" "$(count different)" 1
-eq "G in_sync=10" "$(count in_sync)" 10
+eq "G in_sync=11" "$(count in_sync)" 11
 run --apply
 eq "G apply exit 0" "$RC" 0
 eq "G three copied" "$(printf '%s\n' "$OUT" | grep -c '^copied=')" 3
@@ -255,7 +255,7 @@ eq "M unmanaged root file kept" "$(cat "$CFG/notes.txt")" "my private notes"
 eq "M unmanaged agent kept" "$(cat "$CFG/agents/custom.md")" "mine"
 want=$( (for e in $MANIFEST; do echo "./.config/opencode/$e"; done; echo ./.config/opencode/opencode.json; echo ./.config/opencode/notes.txt; echo ./.config/opencode/agents/custom.md; echo ./.9router/db/data.sqlite) | LC_ALL=C sort)
 eq "W only manifest files written" "$(files_in "$HM")" "$want"
-eq "W exactly 13 copied lines" "$(printf '%s\n' "$OUT" | grep -c '^copied=')" "$NMAN"
+eq "W exactly $NMAN copied lines" "$(printf '%s\n' "$OUT" | grep -c '^copied=')" "$NMAN"
 eq "W ls of dirs: only 3 dirs created" "$(cd "$CFG" && ls -d */ | LC_ALL=C sort | tr '\n' ' ')" "agents/ commands/ scripts/ "
 
 # N: exec bits
@@ -319,7 +319,7 @@ mkfix s; before=$(snap "$F")
 run
 eq "S no-arg exit 1 (empty install)" "$RC" 1
 hasline "S mode=check" "$OUT" "mode=check"
-eq "S missing=13" "$(count missing)" 13
+eq "S missing=14" "$(count missing)" "$NMAN"
 eq "S no writes" "$(snap "$F")" "$before"
 eq "S install dirs not created" "$(test -d "$CFG/agents" && echo yes || echo no)" no
 eq "S cwd clean" "$(ls -A "$TMP/cwd" | wc -l | tr -d ' ')" 0
@@ -528,7 +528,7 @@ mkbin "$F/bin2" none; RUNPATH="$F/bin2"; run --check
 hasline "R9 checksum_tool=cksum" "$OUT" "checksum_tool=cksum"
 eq "R9 cksum detects drift" "$RC" 1
 eq "R9 cksum drift status" "$(status_of agents/doctor.md)" different
-eq "R9 cksum others in_sync" "$(count in_sync)" 12
+eq "R9 cksum others in_sync" "$(count in_sync)" 13
 cp "$REPO/integrations/opencode/agents/doctor.md" "$CFG/agents/doctor.md"; run --check
 eq "R9 cksum clean when identical" "$RC" 0
 printf 'dummy agents/doctor.md v2\n' >"$CFG/agents/doctor.md"; run --check
@@ -905,6 +905,41 @@ if printf '%s\n' "$mvblk" | sed -n 1p | grep -q 'dest_safe' && printf '%s\n' "$m
 for pat in '\bgit\b' 'rsync' 'cp -r' 'cp -R' 'sqlite' 'opencode\.json' '9router' '\brm -r'; do
   if printf '%s\n' "$code" | grep -Eq -- "$pat"; then bad "static: helper code contains /$pat/"; else ok "static: no /$pat/ in helper code"; fi
 done
+
+# /handoff: managed command (manifest, fresh install, preview, apply, re-check)
+if grep -qx '  commands/handoff.md' "$SCRIPT_UNDER_TEST"; then ok "handoff in script manifest"; else bad "handoff in script manifest"; fi
+mkfix ho; before=$(snap "$F")
+run --check
+eq "handoff preview exit 1 (empty install)" "$RC" 1
+eq "handoff preview status missing" "$(status_of commands/handoff.md)" missing
+hasline "handoff preview would_copy" "$OUT" "would_copy=commands/handoff.md"
+eq "handoff preview no writes" "$(snap "$F")" "$before"
+run --apply
+eq "handoff apply exit 0" "$RC" 0
+hasline "handoff apply copied" "$OUT" "copied=commands/handoff.md"
+eq "handoff installed content" "$(fsum "$CFG/commands/handoff.md")" "$(fsum "$REPO/integrations/opencode/commands/handoff.md")"
+eq "handoff installed mode 644" "$(ls -l "$CFG/commands/handoff.md" | cut -c1-10)" "-rw-r--r--"
+run --check
+eq "handoff check clean after apply" "$RC" 0
+eq "handoff status in_sync after apply" "$(status_of commands/handoff.md)" in_sync
+mkfix ho2; install_all; echo changed >"$CFG/commands/handoff.md"
+run --check
+eq "handoff different detected" "$(status_of commands/handoff.md)" different
+
+# /handoff: required structure and safety text of the real command file
+HF="$HERE/../commands/handoff.md"
+if [ -f "$HF" ]; then
+  hf=$(cat "$HF")
+  contains "handoff frontmatter description" "$hf" "description:"
+  for h in "Completed unit:" "Validation:" "Repository state:" "Changed areas:" "Unresolved:" "Next fresh-session task:"; do
+    contains "handoff section $h" "$hf" "$h"
+  done
+  for t in "Never push" "merge" "rewrite Git history" "co-author" "Conventional Commits" "solely to produce a handoff" "Never claim tests passed" "not independent review" "Do not start it"; do
+    contains "handoff safety text: $t" "$hf" "$t"
+  done
+else
+  bad "handoff command file missing"
+fi
 
 echo
 echo "Summary: $pass passed, $failn failed"

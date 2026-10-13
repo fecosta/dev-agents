@@ -33,10 +33,10 @@ Preferred: from the dev-agents checkout, preview and then apply the sync (see "S
 ./integrations/opencode/scripts/sync-install.sh --apply
 ```
 
-**First-time bootstrap** (the `/sync-install` command and agent are not installed yet; the helper itself runs from the checkout, so `--apply` also works without any bootstrap). To install by hand, copy exactly these files (13) from `integrations/opencode/` to `~/.config/opencode/` (same relative paths, scripts executable):
+**First-time bootstrap** (the `/sync-install` command and agent are not installed yet; the helper itself runs from the checkout, so `--apply` also works without any bootstrap). To install by hand, copy exactly these files (14) from `integrations/opencode/` to `~/.config/opencode/` (same relative paths, scripts executable):
 
 - `agents/`: `orchestrator.md`, `doctor.md`, `sync-install.md`
-- `commands/`: `implement-spec.md`, `route-task.md`, `review-change.md`, `split-spec.md`, `doctor.md`, `sync-install.md`
+- `commands/`: `implement-spec.md`, `route-task.md`, `review-change.md`, `split-spec.md`, `doctor.md`, `sync-install.md`, `handoff.md`
 - `scripts/` (mode 755): `review-route.sh`, `resolve-model-family.sh`, `doctor.sh`, `sync-install.sh`
 
 `agents/doctor.md` and `agents/sync-install.md` are separate, narrowly permissioned agents used only by `/doctor` and `/sync-install`; they do not touch or replace the orchestrator.
@@ -203,7 +203,7 @@ Direct equivalents, run from the dev-agents checkout:
 
 ```text
 agents/orchestrator.md  agents/doctor.md  agents/sync-install.md
-commands/implement-spec.md  commands/route-task.md  commands/review-change.md  commands/split-spec.md  commands/doctor.md  commands/sync-install.md
+commands/implement-spec.md  commands/route-task.md  commands/review-change.md  commands/split-spec.md  commands/doctor.md  commands/sync-install.md  commands/handoff.md
 scripts/review-route.sh  scripts/resolve-model-family.sh  scripts/doctor.sh  scripts/sync-install.sh
 ```
 
@@ -234,6 +234,17 @@ scripts/review-route.sh  scripts/resolve-model-family.sh  scripts/doctor.sh  scr
 | `64` | usage error (unsupported argument, or more than one argument); nothing written |
 
 **Tests:** `integrations/opencode/scripts/test-sync-install.sh` (bash 3.2+; `mktemp` fixture repo and HOME only, stub doctor; deterministic race tests (directory creation, temp file, `mv`, staged source, cleanup swaps; no sleeps); never the real `~/.config/opencode` or `~/.9router`).
+
+## Handoff
+
+`/handoff [notes]` closes the current coherent implementation unit and prints a concise handoff for a fresh session (`commands/handoff.md`; no dedicated agent, runs in the current session).
+
+- **When:** at a phase or SPEC boundary, before switching sessions, or when stopping with unfinished work.
+- **What it does:** stops expanding scope; identifies the task/SPEC; runs the validation that task requires (reporting only what actually ran); inspects `git status` and the final diff; commits only if the repository workflow permits it and the unit is complete and validated (never solely to produce a handoff; Conventional Commit, configured author, no AI co-author trailers); otherwise leaves the tree untouched and reports uncommitted changes.
+- **Output:** `Completed unit`, `Validation`, `Repository state`, `Changed areas`, `Unresolved`, `Next fresh-session task`. With no completed unit or an unfinished tree it reports the actual state.
+- **Never:** push, merge, rewrite history, discard unrelated changes, start the next phase.
+- **Not a review:** a handoff is neither independent review nor approval. It does not touch routing, reviewer selection or `/implement-spec`; required review still runs in a fresh opposite-family session.
+- **Install:** `handoff.md` is in the `/sync-install` managed manifest; `sync-install.sh --apply` installs it like the other commands.
 
 ## First test
 
