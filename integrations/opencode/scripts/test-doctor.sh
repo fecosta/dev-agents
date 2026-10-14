@@ -603,6 +603,62 @@ smoke_fix s18; mkbody $NC non-claude review-claude "models=$SENTINEL_CFG" +"x=$S
 lacks "Smoke-R18 resolver text never echoed (config sentinel)" "$OUT" "$SENTINEL_CFG"
 lacks "Smoke-R18 resolver text never echoed (db sentinel)" "$OUT" "$SENTINEL_DB"
 
+# --- Race: watchdog must not delete the parent's temp dir ---------------------
+# Race-1: a command that hits the timeout must not let the watchdog's inherited
+# EXIT trap run cleanup() and delete TMP, causing cascading failures.
+mkfix race_timeout
+printf '#!/bin/sh\nsleep 30\necho "opencode v0.0.0-stub"\n' >"$F/stubs/opencode"; chmod +x "$F/stubs/opencode"
+run_doctor "$DOCTOR" --machine
+eq "Race-1a exit 1 (timeout warning)" "$RC" 1
+eq "Race-1b overall=warn" "$(summary_of overall)" warn
+expect "Race-1c exe_opencode warns" exe_opencode warn
+eq "Race-1d failed=0" "$(summary_of failed)" 0
+for c in exe_bash exe_sqlite3 exe_git installed_orchestrator installed_commands installed_scripts installed_doctor \
+  orchestrator_sync command_sync review_route_sync resolver_sync doctor_sync config_file config_impl_agents \
+  config_review_agents config_explorer db_file db_open db_combos db_usagehistory checkpoint resolver_syntax \
+  resolver_smoke_non_claude resolver_smoke_claude framing_valid framing_malformed framing_trailing_blank; do
+  expect "Race-1e $c still passes after timeout" "$c" pass
+done
+
+# Race-2: parallel stress with fast opencode.  Without the fix the inherited
+# EXIT/TERM traps in the watchdog can delete TMP mid-run; we require 0 failures,
+# empty per-worker TMPDIRs, and (after a bounded wait) no orphan sleep processes.
+mkfix race_stress
+race_tmp="$TMP/race_stress"
+mkdir -p "$race_tmp"
+before_sleep=$(pgrep -af 'sleep 10' | grep -c . || true)
+for w in 1 2 3 4; do
+  mkdir -p "$TMP/tmpd_race$w"
+  (
+    for i in $(seq 1 25); do
+      env -i HOME="$F/home" NINEROUTER_DB="$F/home/.9router/db/data.sqlite" PATH="$F/stubs:$REAL_PATH" TMPDIR="$TMP/tmpd_race$w" \
+        "$BASH_BIN" "$DOCTOR" --machine >"$race_tmp/w$w.$i.out" 2>&1 </dev/null
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        printf 'FAIL w=%s i=%s rc=%s\n' "$w" "$i" "$rc" >>"$race_tmp/failures"
+        head -20 "$race_tmp/w$w.$i.out" >>"$race_tmp/failures"
+      fi
+    done
+    leftovers=$(ls -A "$TMP/tmpd_race$w" 2>/dev/null)
+    if [ -n "$leftovers" ]; then
+      printf 'LEFTOVER w=%s: %s\n' "$w" "$leftovers" >>"$race_tmp/failures"
+    fi
+  ) &
+done
+wait
+race_failures=$(cat "$race_tmp/failures" 2>/dev/null | wc -l | tr -d ' ')
+eq "Race-2a no failures in 4x25 parallel stress" "$race_failures" 0
+race_leftover_n=$(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+if [ "$race_leftover_n" -ne 0 ]; then
+  bad "Race-2b leftover doctor temp dirs ($(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null))"
+else
+  ok "Race-2b no leftover doctor temp dirs"
+fi
+# Watchdog SIGKILL can leave orphan sleeps for up to the 10s timeout.
+sleep 12
+after_sleep=$(pgrep -af 'sleep 10' | grep -c . || true)
+eq "Race-2c no orphan sleep 10 processes after bounded wait" "$((after_sleep - before_sleep))" 0
+
 echo
 echo "Result: $pass passed, $failn failed"
 [ "$failn" -eq 0 ]

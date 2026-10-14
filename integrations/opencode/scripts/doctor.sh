@@ -102,11 +102,15 @@ timed() {
   shift 2
   "$@" >"$out" 2>&1 </dev/null &
   pid=$!
-  ( sleep "$secs"; kill "$pid" ) >/dev/null 2>&1 &
+  # Watchdog: sleep, then kill the command.  It must not inherit the parent's
+  # EXIT/INT/TERM traps: the inherited EXIT trap runs cleanup() and deletes the
+  # parent's TMP, and a TERM arriving before a trap reset can still trigger it.
+  # The parent tears the watchdog down with SIGKILL, which cannot fire traps.
+  ( trap - EXIT INT TERM; sleep "$secs"; kill "$pid" ) >/dev/null 2>&1 &
   wd=$!
   wait "$pid" 2>/dev/null; rc=$?
-  kill "$wd" >/dev/null 2>&1
-  wait "$wd" >/dev/null 2>&1
+  kill -9 "$wd" >/dev/null 2>&1
+  wait "$wd" 2>/dev/null
   return "$rc"
 } 2>/dev/null
 
