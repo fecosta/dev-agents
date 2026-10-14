@@ -98,19 +98,21 @@ notchecked() { check "$1" warn "not checked: $2"; } # <name> <reason>
 
 # Run a command with a time limit: timed <secs> <outfile> cmd...
 timed() {
-  local secs="$1" out="$2" pid wd rc
+  local secs="$1" out="$2" pid rc deadline
   shift 2
   "$@" >"$out" 2>&1 </dev/null &
   pid=$!
-  # Watchdog: sleep, then kill the command.  It must not inherit the parent's
-  # EXIT/INT/TERM traps: the inherited EXIT trap runs cleanup() and deletes the
-  # parent's TMP, and a TERM arriving before a trap reset can still trigger it.
-  # The parent tears the watchdog down with SIGKILL, which cannot fire traps.
-  ( trap - EXIT INT TERM; sleep "$secs"; kill "$pid" ) >/dev/null 2>&1 &
-  wd=$!
+  # No watchdog process: the parent polls the command until it exits or the deadline passes,
+  # then sends SIGTERM (wait reports 143).  Nothing but the command is ever forked, so no
+  # subshell can inherit the EXIT trap (cleanup() would delete TMP) and no sleep can be
+  # orphaned.  SECONDS has 1s granularity, hence +1 so the kill is never early.
+  # ponytail: poll tick is 0.1s (1s where sleep lacks fractions); upgrade: wait -n (bash 4.3+).
+  deadline=$((SECONDS + secs + 1))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then kill "$pid" 2>/dev/null; break; fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
   wait "$pid" 2>/dev/null; rc=$?
-  kill -9 "$wd" >/dev/null 2>&1
-  wait "$wd" 2>/dev/null
   return "$rc"
 } 2>/dev/null
 

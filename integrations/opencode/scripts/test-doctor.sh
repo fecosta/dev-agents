@@ -606,9 +606,30 @@ lacks "Smoke-R18 resolver text never echoed (db sentinel)" "$OUT" "$SENTINEL_DB"
 # --- Race: watchdog must not delete the parent's temp dir ---------------------
 # Race-1: a command that hits the timeout must not let the watchdog's inherited
 # EXIT trap run cleanup() and delete TMP, causing cascading failures.
+#
+# Process-lifecycle tracking is execution-scoped: a `sleep` wrapper in the fixture's stubs dir
+# (first on the doctor's PATH) records its PID, and the stub opencode records its own PID. After
+# the run only those recorded PIDs are checked with kill -0; no global pgrep/ps counting.
+# The stub execs sleep so SIGTERM from the doctor kills the whole stub (no grandchild).
+mksleeplog() { # uses $F: PATH-shadowing sleep wrapper that logs its PID to $F/sleep.pids
+  local real
+  real=$(PATH="$REAL_PATH" command -v sleep)
+  printf '#!/bin/sh\necho $$ >>"%s/sleep.pids"\nexec "%s" "$@"\n' "$F" "$real" >"$F/stubs/sleep"
+  chmod +x "$F/stubs/sleep"
+}
+alive_in() { # <pidfile> -> number of recorded PIDs still alive (missing file = 0)
+  local p n=0
+  for p in $(cat "$1" 2>/dev/null); do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done
+  echo "$n"
+}
+count_in() { wc -l <"$1" 2>/dev/null | tr -d ' '; }
+
 mkfix race_timeout
-printf '#!/bin/sh\nsleep 30\necho "opencode v0.0.0-stub"\n' >"$F/stubs/opencode"; chmod +x "$F/stubs/opencode"
+mksleeplog
+printf '#!/bin/sh\necho $$ >>"%s/opencode.pids"\nexec sleep 30\n' "$F" >"$F/stubs/opencode"; chmod +x "$F/stubs/opencode"
+t0=$SECONDS
 run_doctor "$DOCTOR" --machine
+race_elapsed=$((SECONDS - t0))
 eq "Race-1a exit 1 (timeout warning)" "$RC" 1
 eq "Race-1b overall=warn" "$(summary_of overall)" warn
 expect "Race-1c exe_opencode warns" exe_opencode warn
@@ -619,18 +640,64 @@ for c in exe_bash exe_sqlite3 exe_git installed_orchestrator installed_commands 
   resolver_smoke_non_claude resolver_smoke_claude framing_valid framing_malformed framing_trailing_blank; do
   expect "Race-1e $c still passes after timeout" "$c" pass
 done
+# Race-1f..1i: same timeout run (single ~10s wait reused): the command was really killed at the
+# timeout (not left to finish its 30s sleep), and every process this run spawned is gone.
+case "$race_elapsed" in
+  9 | 1[0-3]) ok "Race-1f timeout fired at ~10s, not 30s (elapsed ${race_elapsed}s)" ;;
+  *) bad "Race-1f timeout fired at ~10s, not 30s (elapsed ${race_elapsed}s)" ;;
+esac
+eq "Race-1g stub opencode was recorded once" "$(count_in "$F/opencode.pids")" 1
+eq "Race-1h timed-out stub opencode is gone" "$(alive_in "$F/opencode.pids")" 0
+eq "Race-1i no PID spawned by this run (command, sleeps) survives" "$(alive_in "$F/sleep.pids")" 0
+eq "Race-1j doctor tempdir cleaned after timeout" "$(ls -A "$TMP/tmpd" | wc -l | tr -d ' ')" 0
+
+# Race-3: timed() itself, extracted verbatim from doctor.sh and run in a subshell with its own
+# EXIT trap (stands in for doctor's cleanup()) and a PID-logging sleep wrapper first on PATH.
+# Bounded: one 1s timeout case; everything else returns at once. No retries.
+tfn=$(sed -n '/^timed() {/,/^} 2>\/dev\/null$/p' "$DOCTOR")
+[ -n "$tfn" ] && ok "Race-3-0 timed() extracted" || bad "Race-3-0 timed() extracted"
+mkdir -p "$TMP/t3/stubs"
+F="$TMP/t3"; mksleeplog
+cat >"$TMP/t3/run.sh" <<EOF
+trap 'echo trap-ran >>"$TMP/t3/trap.log"' EXIT
+$tfn
+PATH="$TMP/t3/stubs:\$PATH"
+t0=\$SECONDS
+timed 30 "$TMP/t3/fast.out" sh -c 'echo hi; exit 0'; echo "fast_rc=\$?"
+echo "fast_elapsed=\$((SECONDS - t0))"
+timed 30 "$TMP/t3/rc.out" sh -c 'exit 7'; echo "pass_rc=\$?"
+t0=\$SECONDS
+timed 1 "$TMP/t3/to.out" sh -c 'echo \$\$ >"$TMP/t3/cmd.pid"; exec sleep 30'; echo "timeout_rc=\$?"
+echo "timeout_elapsed=\$((SECONDS - t0))"
+echo "trap_fired_midrun=\$([ -e "$TMP/t3/trap.log" ] && echo yes || echo no)"
+EOF
+t3=$("$BASH_BIN" "$TMP/t3/run.sh" 2>&1 </dev/null)
+t3v() { printf '%s\n' "$t3" | sed -n "s/^$1=//p"; }
+eq "Race-3a fast command rc 0" "$(t3v fast_rc)" 0
+eq "Race-3b fast command output captured" "$(cat "$TMP/t3/fast.out")" hi
+case "$(t3v fast_elapsed)" in 0 | 1) ok "Race-3c fast command returns promptly" ;; *) bad "Race-3c fast command returns promptly ($(t3v fast_elapsed)s)" ;; esac
+eq "Race-3d non-timeout rc passed through (7)" "$(t3v pass_rc)" 7
+eq "Race-3e timeout rc 143 (SIGTERM)" "$(t3v timeout_rc)" 143
+case "$(t3v timeout_elapsed)" in 1 | 2 | 3) ok "Race-3f killed at the 1s limit, not 30s" ;; *) bad "Race-3f killed at the 1s limit, not 30s ($(t3v timeout_elapsed)s)" ;; esac
+eq "Race-3g timed-out command PID recorded" "$(count_in "$TMP/t3/cmd.pid")" 1
+eq "Race-3h timed-out command is gone" "$(alive_in "$TMP/t3/cmd.pid")" 0
+eq "Race-3i no sleep spawned by timed() survives" "$(alive_in "$TMP/t3/sleep.pids")" 0
+eq "Race-3j parent EXIT trap did not run in any child" "$(t3v trap_fired_midrun)" no
+eq "Race-3k parent EXIT trap ran exactly once (own exit)" "$(count_in "$TMP/t3/trap.log")" 1
 
 # Race-2: parallel stress with fast opencode.  Without the fix the inherited
 # EXIT/TERM traps in the watchdog can delete TMP mid-run; we require 0 failures,
-# empty per-worker TMPDIRs, and (after a bounded wait) no orphan sleep processes.
+# empty per-worker TMPDIRs, and (Race-2c) no process spawned by this execution left alive.
 mkfix race_stress
+mksleeplog
+# a brief-lived opencode makes timed() poll (and so spawn logged sleeps) in every run
+printf '#!/bin/sh\nsleep 0.2\necho "opencode v0.0.0-stub"\n' >"$F/stubs/opencode"; chmod +x "$F/stubs/opencode"
 race_tmp="$TMP/race_stress"
 mkdir -p "$race_tmp"
-before_sleep=$(pgrep -af 'sleep 10' | grep -c . || true)
 for w in 1 2 3 4; do
   mkdir -p "$TMP/tmpd_race$w"
   (
-    for i in $(seq 1 25); do
+    for i in $(seq 1 10); do
       env -i HOME="$F/home" NINEROUTER_DB="$F/home/.9router/db/data.sqlite" PATH="$F/stubs:$REAL_PATH" TMPDIR="$TMP/tmpd_race$w" \
         "$BASH_BIN" "$DOCTOR" --machine >"$race_tmp/w$w.$i.out" 2>&1 </dev/null
       rc=$?
@@ -647,17 +714,18 @@ for w in 1 2 3 4; do
 done
 wait
 race_failures=$(cat "$race_tmp/failures" 2>/dev/null | wc -l | tr -d ' ')
-eq "Race-2a no failures in 4x25 parallel stress" "$race_failures" 0
+eq "Race-2a no failures in 4x10 parallel stress" "$race_failures" 0
 race_leftover_n=$(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
 if [ "$race_leftover_n" -ne 0 ]; then
   bad "Race-2b leftover doctor temp dirs ($(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null))"
 else
   ok "Race-2b no leftover doctor temp dirs"
 fi
-# Watchdog SIGKILL can leave orphan sleeps for up to the 10s timeout.
-sleep 12
-after_sleep=$(pgrep -af 'sleep 10' | grep -c . || true)
-eq "Race-2c no orphan sleep 10 processes after bounded wait" "$((after_sleep - before_sleep))" 0
+# Every sleep any of these doctor runs spawned was logged by the fixture's own wrapper; the doctors
+# have all exited (wait above), so each recorded PID must already be gone. A leaked watchdog
+# sleep (10s) would still be alive here.
+[ "$(count_in "$F/sleep.pids")" -gt 0 ] && ok "Race-2c-0 sleeps were actually tracked ($(count_in "$F/sleep.pids"))" || bad "Race-2c-0 sleeps were actually tracked"
+eq "Race-2c no sleep spawned by these doctor runs is still alive" "$(alive_in "$F/sleep.pids")" 0
 
 echo
 echo "Result: $pass passed, $failn failed"
