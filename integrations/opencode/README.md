@@ -153,7 +153,7 @@ Checks (names are stable):
 
 | Group | Checks |
 | --- | --- |
-| Executables | `exe_bash`, `exe_sqlite3` (missing = FAIL), `exe_git` (missing = WARN), `exe_opencode` (missing = FAIL); versions are reported |
+| Executables | `exe_bash`, `exe_sqlite3` (missing = FAIL), `exe_git` (missing = WARN), `exe_opencode` (missing = FAIL); `sqlite3` and `git` versions are reported. OpenCode availability is checked by `PATH` presence only: `opencode` is never executed and no OpenCode version is reported |
 | Installed files (`~/.config/opencode`) | `installed_orchestrator`, `installed_commands` (implement-spec, route-task, review-change, split-spec), `installed_scripts` (review-route.sh, resolve-model-family.sh; must be executable); all FAIL if absent. `installed_doctor` (doctor command, agent, script): missing = WARN |
 | Stale installs | `orchestrator_sync`, `command_sync` (every repo `commands/*.md`), `review_route_sync`, `resolver_sync`, `doctor_sync`: SHA-256 (`cksum` fallback) of the installed copy vs the repository; difference or missing = WARN `installed copy differs from repository` |
 | OpenCode config | `config_file` (`opencode.json` exists and is valid JSON; missing/invalid = FAIL; no `jq` = WARN, agent checks then `not checked`), `config_impl_agents` (economy/standard/strong/premium: mode `all`, model `9router/*`), `config_review_agents` (review-openai/review-claude: mode `subagent`, model `9router/*`), `config_explorer` (mode `subagent`; WARN if not). Both the `agent` and `agents` keys are read. Upstream model names behind the 9Router aliases are not checked |
@@ -161,6 +161,8 @@ Checks (names are stable):
 | Helpers | `checkpoint` (installed `review-route.sh checkpoint start`: exit 0, exactly one `^[0-9]{1,15}$` line, empty stderr), `resolver_syntax` (`bash -n`), `resolver_smoke_non_claude` / `resolver_smoke_claude` (installed resolver on a temporary fixture DB must yield `family=non-claude reviewer=review-claude` and `family=claude reviewer=review-openai`), `framing_valid` / `framing_malformed` / `framing_trailing_blank` (installed `review-route.sh resolve` run against stub resolvers via its `DEV_AGENTS_RESOLVER` override: valid output accepted, malformed or blank-line-framed output rejected with `RESOLVER_OUTPUT_INVALID`) |
 
 Sync checks run only when `doctor.sh` is executed from a dev-agents checkout (its own location is `<root>/integrations/opencode/scripts` and `<root>/integrations/opencode/agents/orchestrator.md` exists). Elsewhere (for example the installed copy) they report `status=pass detail=skipped (not a dev-agents checkout)` and do not affect the exit code. To check for stale installs, run `integrations/opencode/scripts/doctor.sh` from the checkout.
+
+**Contract change:** earlier doctor versions ran `opencode --version` under a custom timeout and reported its version (WARN on failure or timeout). That timeout/watchdog is removed; `exe_opencode` is now `pass` (`opencode found on PATH`) or `fail` (not on `PATH`). Check names, exit codes and output format are unchanged.
 
 **Strictly read-only:** the doctor never installs, copies, repairs or edits anything and never changes Git, OpenCode config or 9Router. It reads files, opens the DB with `sqlite3 -readonly` + `PRAGMA query_only=1` (only `sqlite_master`/`table_info` metadata plus the checkpoint `MAX(id)`), and does fixture tests in a `mktemp` directory removed on exit. It never selects credential-bearing columns and never prints config values, so no secrets appear in output. It never calls an LLM.
 

@@ -28,6 +28,9 @@
 # <root>/integrations/opencode/agents/orchestrator.md exist). Otherwise they report
 # status=pass detail="skipped (not a dev-agents checkout)".
 #
+# Executables: sqlite3 and git are run only for their --version; opencode is checked by PATH
+# presence only and is never executed.
+#
 # Env: HOME (config dir is $HOME/.config/opencode), NINEROUTER_DB (default
 # $HOME/.9router/db/data.sqlite). Needs bash 3.2+; sqlite3, jq (optional), shasum/sha256sum/cksum.
 
@@ -96,26 +99,6 @@ check() {
 
 notchecked() { check "$1" warn "not checked: $2"; } # <name> <reason>
 
-# Run a command with a time limit: timed <secs> <outfile> cmd...
-timed() {
-  local secs="$1" out="$2" pid rc deadline
-  shift 2
-  "$@" >"$out" 2>&1 </dev/null &
-  pid=$!
-  # No watchdog process: the parent polls the command until it exits or the deadline passes,
-  # then sends SIGTERM (wait reports 143).  Nothing but the command is ever forked, so no
-  # subshell can inherit the EXIT trap (cleanup() would delete TMP) and no sleep can be
-  # orphaned.  SECONDS has 1s granularity, hence +1 so the kill is never early.
-  # ponytail: poll tick is 0.1s (1s where sleep lacks fractions); upgrade: wait -n (bash 4.3+).
-  deadline=$((SECONDS + secs + 1))
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$SECONDS" -ge "$deadline" ]; then kill "$pid" 2>/dev/null; break; fi
-    sleep 0.1 2>/dev/null || sleep 1
-  done
-  wait "$pid" 2>/dev/null; rc=$?
-  return "$rc"
-} 2>/dev/null
-
 fsum() { # portable deterministic checksum of one file
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 <"$1" | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum <"$1" | awk '{print $1}'
@@ -154,13 +137,9 @@ else
   check exe_git warn "git not found on PATH (delegated implementation agents need it to commit)" "install git with your package manager"
 fi
 
+# Presence only: opencode is never executed (a hanging or broken binary cannot stall the doctor).
 if command -v opencode >/dev/null 2>&1; then
-  if timed 10 "$TMP/oc.ver" opencode --version; then
-    v=$(head -n 1 "$TMP/oc.ver")
-    check exe_opencode pass "${v:-version unknown}"
-  else
-    check exe_opencode warn "opencode found but --version failed or timed out"
-  fi
+  check exe_opencode pass "opencode found on PATH"
 else
   check exe_opencode fail "opencode not found on PATH" "install OpenCode (https://opencode.ai/v2/docs/)"
 fi
