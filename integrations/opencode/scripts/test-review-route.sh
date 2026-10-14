@@ -402,7 +402,22 @@ port_order "$PORT" && ok "W3 portable order handoff < verification < review" || 
 sed 's/^12\. Completion verification/14. Completion verification/' "$CMD" > "$TMP/cmd_mut"
 cmd_order "$TMP/cmd_mut" && bad "W4 mutation (CMD verification moved) not detected" || ok "W4 mutation detected (CMD)"
 sed 's/^Completion verification (mandatory/Zompletion verification (mandatory/' "$ORCH" > "$TMP/orch_mut"
-orch_order "$TMP/orch_mut" && bad "W5 mutation (ORCH verification removed) not detected" || ok "W5 mutation detected (ORCH)"
+orch_order "$TMP/orch_mut" && bad "W5 mutation (ORCH heading removed) not detected" || ok "W5 mutation detected (ORCH heading removed)"
+# genuine ORCH ordering mutation: move Review decision before END CHECKPOINT
+awk '
+  { lines[NR] = $0 }
+  /^Review decision:/ { rd_line = NR }
+  /END CHECKPOINT \(mandatory\)/ { end_line = NR }
+  END {
+    for (i = 1; i <= NR; i++) {
+      if (i == rd_line) continue
+      if (i == end_line) print "Review decision:"
+      print lines[i]
+    }
+  }
+' "$ORCH" > "$TMP/orch_mut_order"
+if cmp -s "$ORCH" "$TMP/orch_mut_order"; then bad "W5b mutation produced an identical file"; else ok "W5b mutation file differs from original"; fi
+orch_order "$TMP/orch_mut_order" && bad "W5b mutation (ORCH order inverted) not detected" || ok "W5b mutation detected (ORCH order inverted)"
 
 # FAILED -> NOT_REACHED review fields, within each file's FAILED description
 of=$(lineof "$ORCH" "When Orchestrator verification is FAILED, the review decision is never evaluated")
