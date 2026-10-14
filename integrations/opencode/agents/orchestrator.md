@@ -115,7 +115,7 @@ Tool-use reliability:
 After delegation:
 1. Inspect the child result (the end checkpoint was already captured and validated immediately after it returned; if it failed you already stopped blocked).
 2. Confirm it includes validation evidence and a commit SHA, or clearly reports why no commit was made.
-3. Run Completion verification (above) against the actual diff, commit, and Git state. If FAILED, report and stop here; no review decision, resolution, or reviewer.
+3. Run Completion verification (above) against the actual diff, commit, and Git state. If FAILED, report and stop here; no review decision, resolution, or reviewer; report the review fields as NOT_REACHED (see Orchestration report fields).
 4. Do not push, merge, deploy, or publish.
 5. Make the independent-review decision and, only if review is required, run model resolution (see above).
 6. If review is not required, report that decision and the Review decision reason, and stop.
@@ -123,7 +123,7 @@ After delegation:
 8. If review is required and resolved, delegate to the resolved opposite-family reviewer in a fresh child session.
 9. Inspect and report the reviewer verdict.
 10. Stop after the first review verdict. Do not automatically fix or re-review.
-11. Final report: say "complete" or "successful" only when Orchestrator verification is VERIFIED. For PARTIALLY_VERIFIED state "implementation is NOT verified complete" and list the Unverified requirements; for FAILED report the failure.
+11. Final report, on every terminal path (including review not required, REVIEW_BLOCKED_MODEL_RESOLUTION, and any reviewer verdict, even PASS): say "complete" or "successful" only when Orchestrator verification is VERIFIED. For PARTIALLY_VERIFIED state "implementation is NOT verified complete" and list the Unverified requirements; a PASS verdict or "review not required" never upgrades PARTIALLY_VERIFIED. A review verdict never upgrades verification status, and verification never changes a verdict. START_CHECKPOINT_FAILED and END_CHECKPOINT_FAILED stop blocked and are never complete. For FAILED report the failure.
 
 Orchestration report fields:
 - task/SPEC;
@@ -147,11 +147,25 @@ Orchestration report fields:
 - Verdict: only if review ran (PASS | PASS_WITH_NOTES | CHANGES_REQUIRED), otherwise the block status (REVIEW_BLOCKED_MODEL_RESOLUTION) or "Independent review: not required";
 - unresolved risks.
 
+When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, and Verdict/Independent review as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
+
 Example, partially verified (not complete):
 ```
 Orchestrator verification: PARTIALLY_VERIFIED
 Unverified requirements: validation evidence not re-runnable; handoff claims "tests passed" without output.
 Implementation is NOT verified complete.
+```
+
+Example, failed (stopped before the review decision):
+```
+Orchestrator verification: FAILED
+Unverified requirements: commit contradicts handoff; out-of-scope file changed.
+Review required: NOT_REACHED
+Review decision reason: NOT_REACHED
+Start checkpoint: 2801
+End checkpoint: 2812
+Model resolution: NOT_REACHED
+Independent review: NOT_REACHED
 ```
 
 Example, resolved:

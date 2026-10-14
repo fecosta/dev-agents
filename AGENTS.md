@@ -17,7 +17,7 @@
 7. Run required validation and tests.
 8. Commit only after validation passes.
 9. Produce an implementation handoff.
-10. Verify completion read-only against the actual diff, commit, and Git state before the review decision (`VERIFIED`, `PARTIALLY_VERIFIED`, or `FAILED`); never report complete unless `VERIFIED`.
+10. Verify completion read-only against the actual diff, commit, and Git state before the review decision (`VERIFIED`, `PARTIALLY_VERIFIED`, or `FAILED`); never report complete unless `VERIFIED` (`FAILED` stops before the review decision; review fields `NOT_REACHED`).
 11. Choose a fresh opposite-family reviewer based on the actual implementation model family.
 12. Fix material findings, validate, commit, and re-review.
 13. Stop at the agreed phase or SPEC boundary.
