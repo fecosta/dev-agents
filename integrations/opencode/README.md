@@ -85,9 +85,10 @@ Helper: `review-route.sh` (bash 3.2+, `sqlite3` only), located by the helper-res
 1. **Start checkpoint** immediately before delegating: `review-route.sh checkpoint start` runs the read-only query below and validates one integer (`^[0-9]{1,15}$`).
 2. **Delegate** to the already-selected agent. The capability alias stays in orchestration state and becomes the resolver `<combo-name>`.
 3. **End checkpoint** immediately after the child returns, before the review decision.
-4. **Review decision** from the handoff (control-plane changes always need review). If review is not required, resolution is skipped and no family is reported.
-5. **Resolve** (review required only): `review-route.sh resolve <start> <end> <alias>` runs `resolve-model-family.sh`, strictly validates the key=value output, and checks family and reviewer agree (`claude` -> `review-openai`, `non-claude` -> `review-claude`).
-6. **Route** to that reviewer in a fresh read-only child session (one verdict: `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`; no automatic fix; no push/merge/deploy), or **fail closed** with `REVIEW_BLOCKED_MODEL_RESOLUTION`.
+4. **Completion verification** (read-only, not a review; every delegated implementation): the orchestrator inspects the actual diff, commit, changed files, validation evidence, and Git state against scope and acceptance criteria, not only the handoff. Result `VERIFIED`, `PARTIALLY_VERIFIED` (not verified complete; unverified requirements listed; continues to the review decision), or `FAILED` (report and stop before the review decision; no reviewer, no remediation).
+5. **Review decision** from the handoff and verification (control-plane changes always need review). If review is not required, resolution is skipped and no family is reported.
+6. **Resolve** (review required only): `review-route.sh resolve <start> <end> <alias>` runs `resolve-model-family.sh`, strictly validates the key=value output, and checks family and reviewer agree (`claude` -> `review-openai`, `non-claude` -> `review-claude`).
+7. **Route** to that reviewer in a fresh read-only child session (one verdict: `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`; no automatic fix; no push/merge/deploy), or **fail closed** with `REVIEW_BLOCKED_MODEL_RESOLUTION`.
 
 The only SQL the integration runs:
 
@@ -125,7 +126,7 @@ Order: (1) the installed `~/.config/opencode/scripts/review-route.sh`, if execut
 | End checkpoint fails (any review decision) | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `END_CHECKPOINT_FAILED`; no reviewer; never continues to completion |
 | Start checkpoint fails (any task) | No delegation; `Review/runtime setup: blocked`, reason `START_CHECKPOINT_FAILED` |
 
-Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Review/runtime setup` (only when blocked before delegation), `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
+Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Orchestrator verification` (`VERIFIED | PARTIALLY_VERIFIED | FAILED`) and `Unverified requirements`, before `Review required`; "complete" or "successful" is used only for `VERIFIED`. It also adds `Review/runtime setup` (only when blocked before delegation), `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
 
 **Limitations (accepted, no heuristic fallback):**
 
@@ -262,5 +263,6 @@ Expected flow:
 4. child edits only the bounded target;
 5. child validates and commits;
 6. child returns a handoff; orchestrator captures the end checkpoint (a failure here also stops, blocked);
-7. a docs-only sentence change is typically not review-worthy, so the orchestrator reports `Model resolution: skipped (independent review not required)` and stops;
-8. no push, merge, or deploy.
+7. the orchestrator verifies completion read-only (reads the diff, commit, and changed file; reports `Orchestrator verification: VERIFIED` or lists unverified requirements);
+8. a docs-only sentence change is typically not review-worthy, so the orchestrator reports `Model resolution: skipped (independent review not required)` and stops;
+9. no push, merge, or deploy.

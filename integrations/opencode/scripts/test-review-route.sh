@@ -355,6 +355,31 @@ has J7 "$ORCH" "Verdict: PASS"
 has J8 "$ORCH" "Model resolution reason: MODEL_DETECTION_AMBIGUOUS"
 has J9 "$ORCH" "Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION"
 
+# --- V: orchestrator completion verification checkpoint (static wording)
+for f in "$ORCH" "$CMD"; do
+  n=$(basename "$f")
+  has "V1 $n step exists" "$f" "ompletion verification"
+  has "V2 $n after end checkpoint, before review decision" "$f" "after the end checkpoint and before the review decision"
+  has "V3 $n VERIFIED" "$f" "VERIFIED"
+  has "V4 $n PARTIALLY_VERIFIED" "$f" "PARTIALLY_VERIFIED"
+  has "V5 $n FAILED" "$f" "FAILED"
+  has "V6 $n not verified complete" "$f" "NOT verified complete"
+  has "V7 $n FAILED stops before review decision" "$f" "stop before the review decision"
+  has "V8 $n read-only" "$f" "read-only (no edits"
+  has "V9 $n not independent review" "$f" "not independent review"
+  has "V10 $n git show --stat" "$f" "git show --stat"
+  has "V11 $n report field verification" "$f" "Orchestrator verification"
+  has "V12 $n report field unverified" "$f" "Unverified requirements"
+done
+has V13 "$ORCH" "Order: child returns -> END CHECKPOINT -> completion verification -> review decision"
+has V14 "$ORCH" "never call it complete or successful"
+has V15 "$ORCH" "no reviewer, no automatic remediation, no re-delegation"
+has V16 "$ORCH" "Never accept a \"tests passed\" claim as verified without evidence"
+has V17 "$CMD" "never say complete or successful"
+has V18 "$README" "Completion verification"
+has V19 "$README" "Orchestrator verification"
+hasnot V20 "$ORCH" "Continue to normal completion"
+
 # --- README wording corrected
 hasnot R1 "$README" "keeps later orchestrator traffic out of the window"
 hasnot R2 "$README" "Traffic after \`end-id\` (including the orchestrator's own) is excluded"

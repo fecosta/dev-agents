@@ -76,8 +76,21 @@ Delegation and usage checkpoints (v3b.2):
 - Invariant: child returned + end checkpoint capture fails => orchestration stops blocked, regardless of what the review decision would have been. Report "Model resolution: blocked", "Model resolution reason: END_CHECKPOINT_FAILED", "Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION", launch no reviewer, and stop. Never mark the end checkpoint unavailable, never continue to normal completion, never treat model resolution as unnecessary. A delegated implementation must always close its attribution window.
 - Do not subtract, filter, or guess which usageHistory rows belong to the orchestrator itself (no removal by assumed orchestrator model, newest/oldest row, family, or picking one row). Orchestrator calls made during delegation can fall inside the window; if that makes resolution ambiguous, accept REVIEW_BLOCKED_MODEL_RESOLUTION and stop. A future 9Router/OpenCode session correlation id is the preferred long-term fix.
 
+Completion verification (mandatory for every delegated implementation, including docs-only and economy):
+- Order: child returns -> END CHECKPOINT -> completion verification -> review decision -> (resolve -> review). It runs after the end checkpoint and before the review decision (the end checkpoint stays immediately after the child returns). Keep end_id captured regardless of the result.
+- Strictly read-only (no edits, commits, or fixes). It is not independent review; it neither replaces, is replaced by, triggers, nor skips the review decision.
+- a. Inspect the actual changed artifacts, not only the handoff: `git show --stat <sha>`, `git show`/`git diff` of the commit, and native reads of the changed files.
+- b. Verify against the delegated scope and acceptance criteria: no out-of-scope files, every criterion addressed.
+- c. Verify the reported validation evidence: re-run cheap read-only validation when feasible, otherwise mark the item unverified. Never accept a "tests passed" claim as verified without evidence.
+- d. Verify commit and Git state: the commit SHA exists and its contents match the reported files; `git status` is clean or unrelated changes are preserved; configured author; no AI co-author trailer; Conventional Commit message; nothing pushed or merged.
+- e. Report every unverified requirement explicitly.
+- Result, exactly one of:
+  - VERIFIED: items a-d all verified and no unverified requirements.
+  - PARTIALLY_VERIFIED: required evidence missing or unverifiable (for example no commit SHA, no validation evidence, unreadable artifact). Never VERIFIED. The report must state "implementation is NOT verified complete" and list the Unverified requirements; never call it complete or successful. Continue to the unchanged review decision if applicable.
+  - FAILED: scope/acceptance mismatch, commit/diff contradicts the handoff, validation failing, or unexpected Git state. Report and stop before the review decision and resolution: no reviewer, no automatic remediation, no re-delegation; the user decides.
+
 Review decision:
-- After a successful implementation handoff, decide whether independent review is required.
+- After a successful implementation handoff that completion verification did not mark FAILED, decide whether independent review is required.
 - Do not require independent review mechanically for trivial, low-risk, easily verified changes.
 - Require independent review for control-plane changes that alter routing, delegation, reviewer selection, permissions, Git safety, execution guardrails, or agent behavior, regardless of file format or diff size.
 - Require review when failure cost, hidden-regression risk, security/data impact, architectural impact, or implementation complexity justifies it.
@@ -102,13 +115,15 @@ Tool-use reliability:
 After delegation:
 1. Inspect the child result (the end checkpoint was already captured and validated immediately after it returned; if it failed you already stopped blocked).
 2. Confirm it includes validation evidence and a commit SHA, or clearly reports why no commit was made.
-3. Do not push, merge, deploy, or publish.
-4. Make the independent-review decision and, only if review is required, run model resolution (see above).
-5. If review is not required, report that decision and the Review decision reason, and stop.
-6. If review is required and resolution is blocked, report REVIEW_BLOCKED_MODEL_RESOLUTION with the Model resolution reason, and stop. No reviewer is launched.
-7. If review is required and resolved, delegate to the resolved opposite-family reviewer in a fresh child session.
-8. Inspect and report the reviewer verdict.
-9. Stop after the first review verdict. Do not automatically fix or re-review.
+3. Run Completion verification (above) against the actual diff, commit, and Git state. If FAILED, report and stop here; no review decision, resolution, or reviewer.
+4. Do not push, merge, deploy, or publish.
+5. Make the independent-review decision and, only if review is required, run model resolution (see above).
+6. If review is not required, report that decision and the Review decision reason, and stop.
+7. If review is required and resolution is blocked, report REVIEW_BLOCKED_MODEL_RESOLUTION with the Model resolution reason, and stop. No reviewer is launched.
+8. If review is required and resolved, delegate to the resolved opposite-family reviewer in a fresh child session.
+9. Inspect and report the reviewer verdict.
+10. Stop after the first review verdict. Do not automatically fix or re-review.
+11. Final report: say "complete" or "successful" only when Orchestrator verification is VERIFIED. For PARTIALLY_VERIFIED state "implementation is NOT verified complete" and list the Unverified requirements; for FAILED report the failure.
 
 Orchestration report fields:
 - task/SPEC;
@@ -117,6 +132,8 @@ Orchestration report fields:
 - implementation result;
 - validation result;
 - implementation commit SHA;
+- Orchestrator verification: VERIFIED | PARTIALLY_VERIFIED | FAILED;
+- Unverified requirements: <list or none>;
 - Review required: yes/no;
 - Review decision reason: one short sentence stating why review was required, not required, or blocked;
 - Start checkpoint: <id>, or "not captured" when setup was blocked (no delegation happened);
@@ -130,8 +147,17 @@ Orchestration report fields:
 - Verdict: only if review ran (PASS | PASS_WITH_NOTES | CHANGES_REQUIRED), otherwise the block status (REVIEW_BLOCKED_MODEL_RESOLUTION) or "Independent review: not required";
 - unresolved risks.
 
+Example, partially verified (not complete):
+```
+Orchestrator verification: PARTIALLY_VERIFIED
+Unverified requirements: validation evidence not re-runnable; handoff claims "tests passed" without output.
+Implementation is NOT verified complete.
+```
+
 Example, resolved:
 ```
+Orchestrator verification: VERIFIED
+Unverified requirements: none
 Review required: yes
 Review decision reason: control-plane change to reviewer routing.
 Start checkpoint: 2801

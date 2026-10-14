@@ -12,6 +12,7 @@
 10. Commit only after validation passes.
 11. Produce an implementation handoff.
 12. Record the actual model/model family when observable.
-13. If review is required, start a fresh opposite-family review.
-14. If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review.
-15. Do not push, merge, deploy, or publish unless explicitly requested.
+13. Verify completion read-only before the review decision: inspect the actual diff, commit, and Git state (not only the handoff) against scope and acceptance criteria; report `VERIFIED`, `PARTIALLY_VERIFIED` (not verified complete; list unverified requirements), or `FAILED` (stop). This is not independent review.
+14. If review is required, start a fresh opposite-family review.
+15. If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review.
+16. Do not push, merge, deploy, or publish unless explicitly requested.
