@@ -1,6 +1,12 @@
 # SPEC: Phase A — Post-Implementation Assessment & Decision Helper
 
-- **Status:** Draft revision 4. Design only, not implemented. Revision 2 addressed review cycle 1 (R1–R9); revision 3 addressed review cycle 2 (R2-1–R2-4) and recorded the approved decisions D6 and D7; revision 4 addresses review cycle 3 (R3-1) (section 12). Requires a fresh independent review (control-plane contract) and user approval before Unit U1 starts.
+- **Status:** Draft revision 5. Design only, not implemented.
+  - Revision 2 addressed review cycle 1 (R1–R9).
+  - Revision 3 addressed review cycle 2 (R2-1–R2-4) and recorded the approved decisions D6 and D7.
+  - Revision 4 addressed review cycle 3 (R3-1) and passed review cycle 4.
+  - Revision 5 records the approved decisions D1–D5 and the cycle-4 review (sections 11–12).
+
+  Revision 5 requires a fresh independent review (control-plane contract). Unit U1 starts only on explicit user authorization.
 - **Baseline:** `main` at `9711baa` (equal to `origin/main` at drafting time).
 - **Tier for implementing units:** at least `standard` (control-plane); independent opposite-family review required for every unit.
 - **Authority:** subordinate to [AGENTS.md](../../AGENTS.md) and project-local instructions. Where this SPEC and an existing policy disagree, the existing policy wins until a unit of this SPEC changes it with review.
@@ -314,6 +320,8 @@ Assessment never:
 - contacts deployed environments.
 
 Allowed shell use is read-only Git inspection only.
+
+In v1 these restrictions are enforced by instruction text, not by agent permissions (D2). They are not permission-level enforcement.
 
 ## 6. A4 — Advisory-only Decision Helper
 
@@ -843,7 +851,7 @@ A throwaway reducer, kept outside the repository and not part of Phase A, hand-e
 - **`@none` notation.** Reading `@none` as "not determinable" is the notation defined in 9.1.
 - **Who wrote it.** The encoding was written from the prose by the implementing session. An encoding error that mirrors a prose ambiguity would not be caught.
 
-Unit U1's `test-assessment-fixtures.sh` performs structural checks only (AC-A5.2). Whether to commit a reducer remains open decision D1.
+Unit U1's `test-assessment-fixtures.sh` performs structural checks only (AC-A5.2). No reducer is committed in v1 (D1, approved).
 
 ## 10. Implementation sequence
 
@@ -863,11 +871,11 @@ One unit per `/implement-spec`, sequential, each `standard` or higher, each inde
 
 | ID | Item | Status |
 | --- | --- | --- |
-| D1 | Deterministic reducer script (key=value in, readiness + decision out) to make rules executable | **Open**; default: deferred, Markdown contract + structural fixture test |
-| D2 | `/assess` runs on the orchestrator agent, so "no delegation" is enforced by instruction rather than permissions. Alternative: a dedicated narrowly-permissioned agent like `doctor` | **Open**; default: orchestrator agent |
-| D3 | Fixture location `examples/assessment/` and test in `integrations/opencode/scripts/` (where all suites live), though the contract is portable | **Open**; default as stated |
-| D4 | `PREPARE_NEXT_UNIT` requires a recorded `[human]` acceptance of the current unit | **Open**; default: required |
-| D5 | Environment names are project-defined; required environments are only those named by acceptance criteria or project `AGENTS.md` | **Open**; default as stated |
+| D1 | Defer the deterministic reducer. v1 uses the Markdown decision contract, complete fixtures (9.1), and structural tests. Rationale: keeps v1 small; the rules are still reducible by hand and were checked with an out-of-repo reducer (9.2). Implications: U1's `test-assessment-fixtures.sh` stays structural (AC-A5.2); no reducer is committed; every unit's independent review still evaluates fixture behavior (readiness, decision, cited rule, `must_not_decide`) by hand or by an out-of-repo reducer | **Approved** by the user (decision closure after review cycle 4) |
+| D2 | `/assess` uses the existing orchestrator agent in v1. Its read-only and no-delegation restrictions (5.4) are enforced by instruction, **not** by agent permissions. Rationale: no new agent or permission set in v1. Alternative not taken: a dedicated narrowly-permissioned agent like `doctor`. Implications: U3's `/assess` command and the policy state that the restrictions are instruction-based and not permission-level enforcement; a permission-enforced agent would need a new decision | **Approved** by the user (decision closure after review cycle 4) |
+| D3 | Fixtures live in `examples/assessment/`; the structural test lives in `integrations/opencode/scripts/`. Rationale: all existing suites live there, although the contract is portable. Implications: U1 delivers the files at these paths (10) | **Approved** by the user (decision closure after review cycle 4) |
+| D4 | `PREPARE_NEXT_UNIT` requires a recorded `[human]` acceptance of the current unit (6.2 rule 10). The recommendation never authorizes automatic implementation. Rationale: the next unit starts only by user choice. Implications: rule 10 and fixture S10 stand as written; preparing or starting the next unit still needs a new explicit user command (6.4) | **Approved** by the user (decision closure after review cycle 4) |
+| D5 | Required environments are those named by acceptance criteria or project `AGENTS.md`; environment names remain project-defined. Rationale: Phase A defines no environment catalogue. Implications: I6/I7 (3.1) stand as written; fixture environment names (`production`, `supabase-test`) are illustrative | **Approved** by the user (decision closure after review cycle 4) |
 | D6 | `docs/specs/` is the location for Phase A specifications | **Approved** by the user (review cycle 3 authorization) |
 | D7 | The portable `/implement-spec` contract adopts stop-after-verdict semantics; `CHANGES_REQUIRED` never triggers automatic remediation (7.1) | **Approved** by the user (review cycle 3 authorization); implementation assigned to U4 |
 
@@ -911,6 +919,19 @@ Risks:
 | ID | Severity | Finding (short) | Disposition |
 | --- | --- | --- | --- |
 | R3-1 | blocking | 5.3 made `blocked(...)@none` and `pending@none` `unknown`, contradicting S8a, S8b and S12; 9.2 overstated the reducer | Fixed: 5.3 applies freshness only to verdicts and keeps `blocked(...)`, `pending` and `not_required`; 9.1 defines `@none`; S8a, S8b and S12 citations name the kept state; 9.2 corrected and re-run with a targeted regression check |
+
+**Cycle 4:** `review-openai` on commit `192c138` (revision 4), verdict `PASS`. It reported no blocking or non-blocking findings.
+
+| ID | Status in cycle 4 |
+| --- | --- |
+| R3-1 | Resolved |
+| R2-2, R2-3 | Resolved |
+| R2-1, R2-4 | No regression |
+
+Attribution:
+
+- **Reviewer:** OpenAI family. The run was pinned with `--model 9router/review-openai`. The supporting runtime evidence is reported, not reproducible from this commit: the 9Router `usageHistory` rows in the review window all recorded `gpt-5.6-sol` with status `ok`, and the resolver returned `family=non-claude`.
+- **Implementer:** Claude family, self-reported by the implementing session and not independently runtime-resolved.
 
 ## 13. Operational findings (outside Phase A scope)
 
