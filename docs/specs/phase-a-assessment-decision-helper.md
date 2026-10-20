@@ -1,6 +1,6 @@
 # SPEC: Phase A — Post-Implementation Assessment & Decision Helper
 
-- **Status:** Draft revision 3. Design only, not implemented. Revision 2 addressed review cycle 1 (R1–R9); revision 3 addresses review cycle 2 (R2-1–R2-4) and records the approved decisions D6 and D7 (section 12). Requires a fresh independent review (control-plane contract) and user approval before Unit U1 starts.
+- **Status:** Draft revision 4. Design only, not implemented. Revision 2 addressed review cycle 1 (R1–R9); revision 3 addressed review cycle 2 (R2-1–R2-4) and recorded the approved decisions D6 and D7; revision 4 addresses review cycle 3 (R3-1) (section 12). Requires a fresh independent review (control-plane contract) and user approval before Unit U1 starts.
 - **Baseline:** `main` at `9711baa` (equal to `origin/main` at drafting time).
 - **Tier for implementing units:** at least `standard` (control-plane); independent opposite-family review required for every unit.
 - **Authority:** subordinate to [AGENTS.md](../../AGENTS.md) and project-local instructions. Where this SPEC and an existing policy disagree, the existing policy wins until a unit of this SPEC changes it with review.
@@ -71,7 +71,7 @@ The table below lists every input to readiness (3.3) and to the decision rules (
 | --- | --- | --- | --- | --- |
 | I1 | `assessed_commit` | `known`, `unknown` | `unknown` | 5.1 defines how it is determined |
 | I2 | `implementation` | `complete`, `incomplete`, `none`, `unknown` | `unknown` | Whether the unit's changes exist at the assessed commit |
-| I3 | `review` | `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED` (verbatim, fresh), `not_required`, `pending`, `stale`, `blocked(<status>, <reason>)`, `unknown` | `unknown` | Freshness in 5.3. `unknown` also covers "whether review is required is unknown". `blocked` carries the existing status and reason verbatim |
+| I3 | `review` | `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED` (verbatim, fresh), `not_required`, `pending`, `stale`, `blocked(<status>, <reason>)`, `unknown` | `unknown` | Freshness (verdicts only) in 5.3. `unknown` also covers "whether review is required is unknown". `blocked` carries the existing status and reason verbatim |
 | I4 | `validation[]`: each *required* check | `passed`, `failed(<cause>)`, `partial`, `not_run`, `unknown` | `unknown` | Required checks come from the SPEC/task and project `AGENTS.md`. `failed` = at least one failure; `partial` = ran without failures but did not cover the required scope |
 | I5 | `validation[]`: each *non-required* check | same as I4 | `unknown` | Recorded only |
 | I6 | `environments[]`: each *required* environment | `verified`, `pending`, `failed(<cause>)`, `not_applicable`, `unknown` | `unknown` | Required = named by an acceptance criterion or project `AGENTS.md`. Names are project-defined |
@@ -262,13 +262,19 @@ Empty lists are written `none`, never omitted.
 
 ### 5.3 Freshness, conflicts, and incomplete evidence
 
-**Review freshness** is decided only by the reviewed commit versus the assessed commit:
+**Review freshness** applies only to a review verdict (`PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`). It is decided only by the verdict's reviewed commit versus the assessed commit:
 
-- `reviewed_commit == assessed_commit`: fresh; the verdict governs.
+- `reviewed_commit == assessed_commit`: the verdict is current and governs, verbatim.
 - `reviewed_commit ≠ assessed_commit`: `stale`.
 - `reviewed_commit` not determinable: `unknown`.
 
-When several reviews exist, the governing one is the latest cycle whose `reviewed_commit == assessed_commit`.
+**Non-verdict review states are not freshness-evaluated.** They keep their state whether or not a reviewed commit exists:
+
+- `blocked(<status>, <reason>)` stays `blocked(...)`, with status and reason verbatim. It never becomes `unknown` or `stale`, so 6.2 rule 2 always applies to it.
+- `pending` stays `pending`.
+- `not_required` stays `not_required`.
+
+When several reviews exist, the governing one is the latest cycle with a current verdict, unless a later cycle is `blocked(...)` or `pending`; then that later cycle governs. If no current verdict exists, the latest cycle governs, with its state determined as above.
 
 **Other evidence is also commit-bound.** A handoff whose resulting commit differs from the assessed commit does *not* change review freshness. Instead:
 
@@ -435,7 +441,7 @@ This change is assigned to U4 and is **not made by this SPEC change**; the opera
 
 - AC-A3.1 The procedure emits the 5.2 block with every field present (`none` when empty).
 - AC-A3.2 The procedure states the input authority order and assessed-commit rule (5.1), and the 5.3 rules:
-  - freshness is decided solely by `reviewed_commit` vs the assessed commit;
+  - freshness applies only to verdicts and is decided solely by `reviewed_commit` vs the assessed commit; `blocked(...)` and `pending` keep their state without a reviewed commit;
   - a handoff mismatch is a conflict, not staleness;
   - finding identity across cycles, including `not re-checked` → `unknown`;
   - failure-cause classification.
@@ -476,7 +482,7 @@ This change is assigned to U4 and is **not made by this SPEC change**; the opera
 
 - Lists use `name=value`, separated by `; `.
 - `validation` and `environments` list *required* items. Non-required items, where present, go in `validation_optional` and `environments_optional`.
-- `review` is `<value>@<reviewed_commit>`. Freshness is computed against `assessed_commit` (5.3).
+- `review` is `<value>@<reviewed_commit>`; `@none` means no reviewed commit is determinable. For verdicts, freshness is computed against `assessed_commit` (5.3); other values are kept as written.
 - `findings` are `id=status/severity`. `conflicts` is `none` or a list of `id=resolved_by_authority|unresolved`.
 - `rules` cites the governing 3.3 caps and the 6.2 rule.
 
@@ -688,7 +694,7 @@ human_acceptance: not_recorded
 next_unit: available
 expected_readiness: blocked
 expected_decision: REQUEST_HUMAN_DECISION
-rules: 3.3 I3 blocked -> blocked; 6.2 rule 2
+rules: 3.3 I3 blocked (kept without a reviewed commit, 5.3) -> blocked; 6.2 rule 2
 must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
 ```
 
@@ -709,7 +715,7 @@ human_acceptance: not_recorded
 next_unit: available
 expected_readiness: blocked
 expected_decision: REQUEST_HUMAN_DECISION
-rules: 3.3 I3 blocked -> blocked; 6.2 rule 2
+rules: 3.3 I3 blocked (kept without a reviewed commit, 5.3) -> blocked; 6.2 rule 2
 must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
 ```
 
@@ -793,19 +799,49 @@ human_acceptance: not_recorded
 next_unit: available
 expected_readiness: blocked
 expected_decision: REQUEST_HUMAN_DECISION
-rules: 3.3 I3 pending -> blocked, I2 incomplete -> not_ready; 6.2 rule 3
+rules: 3.3 I3 pending (kept without a reviewed commit, 5.3) -> blocked, I2 incomplete, I9 unverified -> not_ready; 6.2 rule 3
 must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
 ```
 
-### 9.2 Reducibility check (performed for revision 3)
+### 9.2 Reducibility check (performed for revision 4)
 
-A throwaway reducer, kept outside the repository and not part of Phase A, encoded 3.3 and 6.2 literally. It was used for two checks:
+A throwaway reducer, kept outside the repository and not part of Phase A, hand-encodes 3.3, the single-review freshness rule of 5.3, and 6.2. It is evidence for this SPEC's consistency, not an executable definition of it.
 
-1. **Fixtures:** it parsed all 15 fixtures in 9.1 and recomputed readiness, decision, and the governing 6.2 rule. For every fixture, the required keys and basis label were present, the recomputed readiness and decision matched `expected_readiness` and `expected_decision`, the rule matched the cited `rules`, and the decision was not in `must_not_decide`.
-2. **State space:** it enumerated 71,124,480 states. Each list input took either the empty list or one item, over the full 3.1 domains; one item per list is sufficient because caps take the maximum over items and every list rule is "any item". I7 was omitted because no cap or rule reads it. The results:
+**Revision 3 correction.** The revision 3 version of this section said the reducer encoded the rules literally. That was not accurate. The reducer applied freshness only to verdicts, while the revision 3 wording of 5.3 applied it to every review value. Its 15/15 result therefore validated the intended rule, not the text as written. The independent review found the divergence (R3-1). Revision 4 changes 5.3 to the intended rule, and the reducer now follows that wording.
+
+**Checks run on revision 4:**
+
+1. **Fixtures.** The reducer parsed all 15 fixtures in 9.1, normalized `review` through 5.3, and recomputed readiness, decision, and the governing 6.2 rule. All 15 matched. For each fixture:
+   - the required keys and basis label were present;
+   - readiness and decision matched `expected_readiness` and `expected_decision`;
+   - the 6.2 rule and the I3 cap named in `rules` matched;
+   - the decision was not in `must_not_decide`.
+
+   S8a and S8b reduced to I3 `blocked`, readiness `blocked`, and `REQUEST_HUMAN_DECISION` by rule 2. S12 reduced to I3 `pending`, readiness `blocked`, and `REQUEST_HUMAN_DECISION` by rule 3.
+2. **Targeted regression.** The same fixtures were reduced with the revision 3 wording of 5.3 applied literally:
+   - S8a and S8b gave I3 `unknown` and `VERIFY_FURTHER`, which fails.
+   - S12 gave I3 `unknown`, so its cited cap no longer matched, which also fails.
+   - The other 12 fixtures were unaffected.
+
+   The check therefore detects R3-1.
+3. **Review normalization.** All 21 combinations of {`PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`, `not_required`, `pending`, `blocked(...)`, `unknown`} × reviewed commit {assessed, other, none} were checked. Verdicts gave current, `stale` and `unknown` respectively. `blocked(...)` always stayed `blocked`, `pending` always stayed `pending`, and no non-verdict became `stale`.
+4. **State space.** The reducer enumerated 71,124,480 states over the 3.1 domains, using the normalized I3 values. Each list input took either the empty list or one item. One item is enough because caps take the maximum over items and every list rule is "any item". Results:
    - rule 11 was never reached;
-   - no state whose review is anything other than `PASS`, `PASS_WITH_NOTES` or `not_required` produced `ACCEPT_UNIT` or `PREPARE_NEXT_UNIT`, and neither action was produced from readiness other than `ready`/`ready_with_notes`;
+   - only a review of `PASS`, `PASS_WITH_NOTES` or `not_required` produced `ACCEPT_UNIT` or `PREPARE_NEXT_UNIT`;
+   - in particular, `CHANGES_REQUIRED` never produced either action;
+   - neither action was produced from readiness other than `ready` or `ready_with_notes`;
+   - every `blocked(...)` review produced `REQUEST_HUMAN_DECISION`;
    - no state with absent evidence in a required input produced either action. The required inputs checked were `assessed_commit`, `implementation`, `review`, required validation, required environment, acceptance, and finding status.
+
+**Limitations.** The reducer is not proven equivalent to this SPEC:
+
+- **Derived inputs.** Fixtures give I1–I14 already derived. The reducer does not apply 5.1 (choosing the assessed commit), the "several reviews" governing rule in 5.3, handoff-mismatch conflicts, or finding resolution across cycles. Those remain prose rules, checked only by review.
+- **One representative per family of values.** Values that no cap or rule distinguishes are represented once:
+  - I7 is omitted;
+  - `failed(identified:<category>)` uses one category;
+  - `blocked(...)` uses one status and reason.
+- **`@none` notation.** Reading `@none` as "not determinable" is the notation defined in 9.1.
+- **Who wrote it.** The encoding was written from the prose by the implementing session. An encoding error that mirrors a prose ambiguity would not be caught.
 
 Unit U1's `test-assessment-fixtures.sh` performs structural checks only (AC-A5.2). Whether to commit a reducer remains open decision D1.
 
@@ -869,6 +905,12 @@ Risks:
 | R2-2 | blocking | Fixtures lack complete input state | Fixed: every fixture lists I1–I14 (as fixture keys), expected readiness, expected decision, rule references, and `must_not_decide`; reducibility checked (9.2) |
 | R2-3 | blocking | Resolver retry could use changed evidence | Fixed: every `blocked(...)` review → `REQUEST_HUMAN_DECISION`; no retry or re-resolution recommendation (6.2 rule 2); S8b expectation changed accordingly |
 | R2-4 | non-blocking | OF-1 overstated | Fixed: OF-1 now describes only the observed invocation (13) |
+
+**Cycle 3:** `review-openai` on commit `ccb63b2`, verdict `CHANGES_REQUIRED`. It reported R2-1 and R2-4 resolved, and R2-2 and R2-3 still open through R3-1. Disposition in revision 4:
+
+| ID | Severity | Finding (short) | Disposition |
+| --- | --- | --- | --- |
+| R3-1 | blocking | 5.3 made `blocked(...)@none` and `pending@none` `unknown`, contradicting S8a, S8b and S12; 9.2 overstated the reducer | Fixed: 5.3 applies freshness only to verdicts and keeps `blocked(...)`, `pending` and `not_required`; 9.1 defines `@none`; S8a, S8b and S12 citations name the kept state; 9.2 corrected and re-run with a targeted regression check |
 
 ## 13. Operational findings (outside Phase A scope)
 
