@@ -1,6 +1,6 @@
 # SPEC: Phase A — Post-Implementation Assessment & Decision Helper
 
-- **Status:** Draft, revision 2. Design only, not implemented. Revision 2 addresses review cycle 1 (findings R1–R9, see section 12). Requires a fresh independent review (control-plane contract) and user approval before Unit U1 starts.
+- **Status:** Draft revision 3. Design only, not implemented. Revision 2 addressed review cycle 1 (R1–R9); revision 3 addresses review cycle 2 (R2-1–R2-4) and records the approved decisions D6 and D7 (section 12). Requires a fresh independent review (control-plane contract) and user approval before Unit U1 starts.
 - **Baseline:** `main` at `9711baa` (equal to `origin/main` at drafting time).
 - **Tier for implementing units:** at least `standard` (control-plane); independent opposite-family review required for every unit.
 - **Authority:** subordinate to [AGENTS.md](../../AGENTS.md) and project-local instructions. Where this SPEC and an existing policy disagree, the existing policy wins until a unit of this SPEC changes it with review.
@@ -26,7 +26,7 @@ Non-goals:
 
 - Implementing anything in this document's own change.
 - Changing routing, model resolution, reviewer selection, checkpoints, or review verdict semantics.
-- Autonomous continuation, deployment automation, persistent telemetry, retrospectives, debugging automation.
+- Autonomous continuation, automatic retries, deployment automation, persistent telemetry, retrospectives, debugging automation.
 - Changes to external project repositories.
 
 ## 1. Current-state architecture assessment
@@ -38,24 +38,24 @@ Non-goals:
 | Bounded units | Vertical slices, one unit per `/implement-spec`, no automatic continuation | [commands/split-spec.md](../../commands/split-spec.md) |
 | Implementation flow (portable) | Step 14: "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | [commands/implement-spec.md](../../commands/implement-spec.md) |
 | Implementation flow (OpenCode) | Start/end checkpoints (mandatory), delegation, review decision, runtime family resolution, fail-closed reasons, report fields; "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict." | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md), [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) |
-| Runtime provenance | `review-route.sh` checkpoint/resolve; `resolve-model-family.sh` key=value contract with documented block reasons | [integrations/opencode/README.md](../../integrations/opencode/README.md), [resolve-model-family.sh](../../integrations/opencode/scripts/resolve-model-family.sh) |
+| Runtime provenance | `review-route.sh` checkpoint/resolve; `resolve-model-family.sh` key=value contract with documented block reasons. Resolution reads the *current* `usageHistory` rows and `combos` definition | [integrations/opencode/README.md](../../integrations/opencode/README.md), [resolve-model-family.sh](../../integrations/opencode/scripts/resolve-model-family.sh), [review-route.sh](../../integrations/opencode/scripts/review-route.sh) |
 | Review | Opposite-family reviewer; verdicts `PASS` / `PASS_WITH_NOTES` / `CHANGES_REQUIRED`; blocking / non-blocking findings | [policies/review-routing.md](../../policies/review-routing.md), [templates/review-report.md](../../templates/review-report.md), [commands/review-change.md](../../commands/review-change.md) |
 | Handoff (template) | Unit, start/result commit, tier, model/family, reviewer, files, tests, lint/build, risks, next phase | [templates/implementation-handoff.md](../../templates/implementation-handoff.md) |
 | Handoff (command) | `/handoff`: fixed six-section close-out (`Completed unit`, `Validation`, `Repository state`, `Changed areas`, `Unresolved`, `Next fresh-session task`); structure asserted by `test-sync-install.sh` | [integrations/opencode/commands/handoff.md](../../integrations/opencode/commands/handoff.md) |
 | Install / health | `sync-install.sh` hard-coded 14-entry manifest (mirrored in `test-sync-install.sh` `NMAN=14` and the README install list); `doctor.sh` `command_sync` covers every `commands/*.md` automatically, while `installed_commands` requires a fixed four | [integrations/opencode/scripts/sync-install.sh](../../integrations/opencode/scripts/sync-install.sh), [integrations/opencode/scripts/doctor.sh](../../integrations/opencode/scripts/doctor.sh) |
 | Product record | CURRENT STATE / DECISIONS / FUTURE VISION | [docs/PRODUCT.md](../PRODUCT.md) |
 
-No SPEC convention existed before this document; earlier SPECs were task prompts. This SPEC *proposes* `docs/specs/` as the location (open decision D6).
+No SPEC convention existed before this document; earlier SPECs were task prompts. `docs/specs/` is the approved location for Phase A specifications (D6, section 11).
 
 ## 2. Gap analysis
 
 | Need | Existing behavior | Gap | Phase A response |
 | --- | --- | --- | --- |
 | Distinguish implementation, validation, review, environment verification, readiness | Report fields cover implementation result, validation result, verdict | No environment dimension, no per-criterion status, no derived readiness | A1 state contract |
-| Partial verification and missing evidence | "Not run" wording in `/handoff`; fail-closed resolver reasons | No uniform `unknown` / `pending` representation | A1: every dimension has `unknown`; fail closed |
+| Partial verification and missing evidence | "Not run" wording in `/handoff`; fail-closed resolver reasons | No uniform representation of absent evidence | A1: every input whose evidence can be absent has an explicit absent-evidence value; fail closed |
 | Observed vs asserted evidence | Orchestrator does not trust child self-reported family | No general labeling for other evidence | A1 evidence labels |
 | Finding identity across review cycles | Free-text findings per report | Cycle-2 findings can be confused with cycle-1 findings | A2 finding IDs `R<cycle>-<n>` |
-| Interpreting results into a next action | OpenCode orchestrator stops; human interprets. Portable command loops into remediation | No structured recommendation; portable/OpenCode stop semantics differ | A3 assessment + A4 Decision Helper; reconciliation decision D7 |
+| Interpreting results into a next action | OpenCode orchestrator stops; human interprets. Portable command loops into remediation | No structured recommendation; portable/OpenCode stop semantics differ | A3 assessment + A4 Decision Helper; D7 (approved, scheduled in U4) |
 | Re-assessment after out-of-band evidence (e.g. a production check) | None | No entry point | `/assess` command |
 | Handoff model/family fields | Template has "Actual implementation model/family", but the child returns its handoff before resolution runs, and the orchestrator forbids child self-report | Ambiguous ownership | A2: child writes `pending`; orchestrator report is authoritative (4.3) |
 
@@ -63,22 +63,30 @@ Not gaps (reused unchanged): checkpoints, resolver, reviewer selection, verdict 
 
 ## 3. A1 — Verification-state contract
 
-### 3.1 Dimensions
+### 3.1 Input dimensions and value domains
 
-Each dimension is recorded independently. They are never collapsed into a single PASS/FAIL. Every dimension has an `unknown` value, used whenever evidence is absent or cannot be tied to the assessed commit.
+The table below lists every input to readiness (3.3) and to the decision rules (6.2). Each domain is closed. Every input whose evidence can be absent has an explicit absent-evidence value, and that value never satisfies a requirement.
 
-| Dimension | Values | Notes |
-| --- | --- | --- |
-| `implementation` | `complete`, `incomplete`, `none`, `unknown` | Whether the bounded unit's changes exist at the assessed commit |
-| `validation` (per check) | `passed`, `failed`, `partial`, `not_run`, `unknown` | One entry per check. *Required* checks come from the SPEC/task and project `AGENTS.md`. Evidence is bound to a commit (see 5.3) |
-| `review` | `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED` (verbatim), or `not_required`, `pending`, `stale`, `blocked`, `unknown` | Bound to `{cycle, reviewed_commit}`. `stale` and freshness are defined in 5.3. `blocked` carries the existing status and reason unchanged (e.g. `REVIEW_BLOCKED_MODEL_RESOLUTION` + `MODEL_DETECTION_AMBIGUOUS`). `unknown` also covers "whether review is required is unknown" |
-| `environments[]` | `verified`, `pending`, `failed`, `not_applicable`, `unknown` | Names are project-defined (e.g. `local`, `ci`, `preview`, `production`). *Required* environments are those named by an acceptance criterion or by project `AGENTS.md` |
-| `acceptance[]` | `met`, `unverified`, `not_met`, `needs_human_decision`, `unknown` | One entry per acceptance criterion, tagged `functional`, `user-facing`, `security`, `data`, or `other`. If the SPEC/task's acceptance criteria cannot be located, a single entry `AC-? — unknown` is recorded |
-| `failures[]` | each failed validation/environment carries `cause: unexplained` or `cause: identified(<category>)` | Categories: `application`, `test-fixture`, `infrastructure`, `environment`, `other`. `identified` requires cited evidence |
-| `findings[]` | `R<cycle>-<n>` (review) or `I-<n>` (implementer/assessor); `blocking` or `non-blocking`; `open` or `resolved` | Resolution rules in 5.3 |
-| `readiness` (derived) | `blocked`, `not_ready`, `needs_human_decision`, `ready_with_notes`, `ready` | Never set directly; computed by 3.3 |
+| # | Input | Domain | Absent evidence is | Notes |
+| --- | --- | --- | --- | --- |
+| I1 | `assessed_commit` | `known`, `unknown` | `unknown` | 5.1 defines how it is determined |
+| I2 | `implementation` | `complete`, `incomplete`, `none`, `unknown` | `unknown` | Whether the unit's changes exist at the assessed commit |
+| I3 | `review` | `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED` (verbatim, fresh), `not_required`, `pending`, `stale`, `blocked(<status>, <reason>)`, `unknown` | `unknown` | Freshness in 5.3. `unknown` also covers "whether review is required is unknown". `blocked` carries the existing status and reason verbatim |
+| I4 | `validation[]`: each *required* check | `passed`, `failed(<cause>)`, `partial`, `not_run`, `unknown` | `unknown` | Required checks come from the SPEC/task and project `AGENTS.md`. `failed` = at least one failure; `partial` = ran without failures but did not cover the required scope |
+| I5 | `validation[]`: each *non-required* check | same as I4 | `unknown` | Recorded only |
+| I6 | `environments[]`: each *required* environment | `verified`, `pending`, `failed(<cause>)`, `not_applicable`, `unknown` | `unknown` | Required = named by an acceptance criterion or project `AGENTS.md`. Names are project-defined |
+| I7 | `environments[]`: each *non-required* environment | same as I6 | `unknown` | Recorded only |
+| I8 | `<cause>` of a `failed` item in I4–I7 | `unexplained`, `identified:<category>` | `unexplained` | Categories: `application`, `test-fixture`, `infrastructure`, `environment`, `other`. `identified` requires cited evidence; a hypothesis is not evidence |
+| I9 | `acceptance[]`: each criterion | `met`, `unverified`, `not_met`, `needs_human_decision`, `unknown` | `unknown` | Tagged `functional`, `user-facing`, `security`, `data`, or `other`. If the SPEC/task's criteria cannot be located, one entry `AC-? = unknown` is recorded |
+| I10 | `findings[]`: status × severity of each finding | status `open`, `resolved`, `unknown`; severity `blocking`, `non-blocking`, `unknown` | status `unknown`; severity `unknown` | IDs `R<cycle>-<n>` (review) or `I-<n>` (implementer/assessor). Resolution rules in 5.3 |
+| I11 | `conflicts[]` | `resolved_by_authority`, `unresolved` | n/a (an empty list means no conflict was found) | 5.3 |
+| I12 | `doc_state` | `in_sync`, `out_of_sync`, `unknown` | `unknown` | Whether SPEC status or product docs match the repository |
+| I13 | `human_acceptance` | `recorded`, `not_recorded` | `not_recorded` | A `[human]` acceptance of this unit |
+| I14 | `next_unit` | `available`, `none`, `unknown` | `unknown` | Whether an approved split has a next unit |
 
-When to use `needs_human_decision` vs `unverified`:
+Inputs I12–I14 affect only the decision rules. They never make a unit look more verified than its evidence supports, so `doc_state = unknown` and `next_unit = unknown` are listed under Missing evidence without blocking.
+
+**`needs_human_decision` vs `unverified` (I9):**
 
 - **`needs_human_decision`** is only for criteria whose satisfaction is a judgment, such as accepting a residual security risk or a product/release sign-off. The required authority (e.g. "project owner", "security owner") must be named.
 - **`unverified`** is for objectively checkable conditions that have not been checked yet, for example "no service-role key in the client bundle".
@@ -93,37 +101,49 @@ Every evidence item carries exactly one label:
 
 An assessor may upgrade `[reported]` to `[observed]` only by re-inspecting the fact read-only. It never re-runs tests (see 5.4). Recommendations are not evidence and are never labeled as such.
 
-### 3.3 Readiness derivation (exhaustive)
+### 3.3 Readiness derivation (total)
 
-Each dimension value imposes a *cap*. Readiness is the most severe cap present, with severity ordered `blocked` > `not_ready` > `needs_human_decision` > `ready_with_notes`. If no cap applies, readiness is `ready`. Every value in 3.1 appears in this table, so the derivation is total.
+**Output domain:** `blocked`, `not_ready`, `needs_human_decision`, `ready_with_notes`, `ready`.
 
-| Dimension | Value | Cap |
+**Rule:** each input value imposes the cap in this table. Readiness is the most severe cap present, with severity ordered `blocked` > `not_ready` > `needs_human_decision` > `ready_with_notes`. If no cap applies, readiness is `ready`.
+
+There is one rule (maximum severity) and no precedence list, so caps cannot overlap or contradict each other. Every value of every input in 3.1 has exactly one row, so readiness is defined for every state.
+
+| Input | Value | Cap |
 | --- | --- | --- |
-| `implementation` | `complete` | none |
+| I1 `assessed_commit` | `known` | none |
+| | `unknown` | `blocked` |
+| I2 `implementation` | `complete` | none |
 | | `incomplete`, `none` | `not_ready` |
 | | `unknown` | `blocked` |
-| `validation` (required check) | `passed` | none |
-| | `failed`, `partial`, `not_run` | `not_ready` |
-| | `unknown` | `blocked` |
-| `validation` (non-required check) | `failed`, `partial` | `ready_with_notes` (recorded as a non-blocking finding) |
-| | `passed`, `not_run`, `unknown` | none |
-| `review` | `PASS`, `not_required` | none |
+| I3 `review` | `PASS`, `not_required` | none |
 | | `PASS_WITH_NOTES` | `ready_with_notes` |
 | | `CHANGES_REQUIRED` | `not_ready` |
-| | `pending`, `stale`, `blocked`, `unknown` | `blocked` |
-| `environments[]` (required) | `verified`, `not_applicable` | none |
-| | `pending`, `failed` | `not_ready` |
+| | `pending`, `stale`, `blocked(...)`, `unknown` | `blocked` |
+| I4 required validation | `passed` | none |
+| | `failed(any cause)`, `partial`, `not_run` | `not_ready` |
 | | `unknown` | `blocked` |
-| `environments[]` (non-required) | any | none (recorded only) |
-| `acceptance[]` | `met` | none |
+| I5 non-required validation | `failed(any cause)`, `partial` | `ready_with_notes` |
+| | `passed`, `not_run`, `unknown` | none |
+| I6 required environment | `verified`, `not_applicable` | none |
+| | `pending`, `failed(any cause)` | `not_ready` |
+| | `unknown` | `blocked` |
+| I7 non-required environment | any value | none |
+| I8 failure cause | `unexplained`, `identified:<category>` | none of its own (the cap comes from the failed item in I4–I7). The cause affects only the decision (6.2 rules 5–6) |
+| I9 acceptance | `met` | none |
 | | `unverified`, `not_met` | `not_ready` |
 | | `needs_human_decision` | `needs_human_decision` |
 | | `unknown` | `blocked` |
-| `findings[]` | open `blocking` | `not_ready` |
-| | open `non-blocking` | `ready_with_notes` |
-| | `resolved` | none |
-| Conflicts (5.3) | unresolved by the authority order | `blocked` |
-| Assessed commit | cannot be determined | `blocked` |
+| I10 finding | status `resolved`, any severity | none |
+| | status `open`, severity `blocking` or `unknown` | `not_ready` |
+| | status `open`, severity `non-blocking` | `ready_with_notes` |
+| | status `unknown`, any severity | `blocked` |
+| I11 conflict | `resolved_by_authority` | none |
+| | `unresolved` | `blocked` |
+| I12 `doc_state` | `out_of_sync` | `ready_with_notes` |
+| | `in_sync`, `unknown` | none |
+| I13 `human_acceptance` | any value | none |
+| I14 `next_unit` | any value | none |
 
 ### 3.4 Relationship to existing review verdicts
 
@@ -133,7 +153,7 @@ Each dimension value imposes a *cap*. Readiness is the most severe cap present, 
 | `PASS_WITH_NOTES` | satisfied for `reviewed_commit` only; notes become non-blocking findings | `ready_with_notes` | yes |
 | `CHANGES_REQUIRED` | failed | `not_ready` | **never** |
 | `stale` (`reviewed_commit ≠ assessed_commit`) | not satisfied for the assessed commit | `blocked` | never |
-| `REVIEW_BLOCKED_MODEL_RESOLUTION` (any reason) | not satisfied; existing fail-closed semantics unchanged | `blocked` | never |
+| `REVIEW_BLOCKED_MODEL_RESOLUTION` (any reason) or any other block status | not satisfied; existing fail-closed semantics unchanged | `blocked` | never |
 | `Independent review: not required` | satisfied by the orchestrator's existing decision | none | yes |
 
 Verdict text is copied verbatim and never rewritten, softened, or reinterpreted. The assessment adds no new verdicts, and the reviewer still returns exactly one of the three.
@@ -159,7 +179,7 @@ No field is renamed, removed, or duplicated. Each existing field gains an option
 
 | Existing field | Optional annotation |
 | --- | --- |
-| `Tests run:` / `Typecheck / lint / build:` | per entry: `<command> — passed\|failed\|partial\|not_run — [label] — at <commit>`; failures may add `cause: unexplained\|identified(<category>)` |
+| `Tests run:` / `Typecheck / lint / build:` | per entry: `<command> — passed\|failed\|partial\|not_run — [label] — at <commit>`; failures add `cause: unexplained\|identified:<category>` |
 | `Unresolved risks:` | per entry: finding ID (`R<cycle>-<n>` / `I-<n>`), `blocking\|non-blocking`, source; unknowns written `unknown: <what is missing>` |
 | `Next phase or closure condition:` | unchanged text; treated by the assessment as an implementer suggestion (`[reported]`, non-authoritative) |
 | `Actual implementation model:` / `Actual model family:` | see 4.3 |
@@ -174,7 +194,7 @@ Two new optional lines are appended:
 Optional additions to [templates/review-report.md](../../templates/review-report.md):
 
 - Finding IDs `R<cycle>-<n>` on each blocking and non-blocking finding.
-- One line `Prior findings status: <id> — resolved|still open|not re-checked`.
+- One line `Prior findings status: <id> — resolved|still open|not re-checked`. `not re-checked` maps to finding status `unknown`.
 
 The verdict line is unchanged.
 
@@ -196,12 +216,12 @@ The U2 template change is wording only; no new field is added.
 
 ### 4.4 Backward compatibility
 
-A handoff without annotations or the two new lines is still valid. Missing items assess as `unknown`:
+A handoff without annotations or the two new lines is still valid. Missing items take their absent-evidence value from 3.1:
 
-- acceptance criteria without status evidence;
-- validation entries without a stated result or commit.
+- acceptance criteria without status evidence are `unknown`;
+- validation entries without a stated result or commit are `unknown`.
 
-`unknown` caps readiness at `blocked`, so the Decision Helper recommends `VERIFY_FURTHER`. Old handoffs therefore fail closed: they are never treated as verified, and nothing breaks.
+These cap readiness at `blocked`, so the Decision Helper recommends `VERIFY_FURTHER` (fixture S7). Old handoffs therefore fail closed: they are never treated as verified, and nothing breaks.
 
 ## 5. A3 — Post-implementation assessment
 
@@ -214,7 +234,7 @@ A handoff without annotations or the two new lines is still valid. Missing items
 5. The implementation handoff or `/handoff` output `[reported]`.
 6. User statements `[human]`, for example "I verified login in production".
 
-**Assessed commit:** the commit the user names. Otherwise it is the unit's resulting commit `[observed]` from Git (normally `HEAD` of the unit branch). If neither can be determined, readiness is `blocked`.
+**Assessed commit:** the commit the user names. Otherwise it is the unit's resulting commit `[observed]` from Git (normally `HEAD` of the unit branch). If neither can be determined, `assessed_commit = unknown`.
 
 ### 5.2 Output block (fixed structure)
 
@@ -235,7 +255,7 @@ Assessment:
 - Missing evidence:
 - Conflicts:
 - Human decisions required:
-- Readiness: <value> — <one-line reason naming the governing cap>
+- Readiness: <value> — <one-line reason naming the governing cap(s)>
 ```
 
 Empty lists are written `none`, never omitted.
@@ -252,7 +272,7 @@ When several reviews exist, the governing one is the latest cycle whose `reviewe
 
 **Other evidence is also commit-bound.** A handoff whose resulting commit differs from the assessed commit does *not* change review freshness. Instead:
 
-- The mismatch is listed under Conflicts as a `[reported]` discrepancy.
+- The mismatch is recorded as a conflict, `resolved_by_authority`.
 - Implementation is taken from `[observed]` Git state.
 - Validation results that the handoff ties to a different commit, or to no commit, are `unknown` for the assessed commit.
 
@@ -262,6 +282,7 @@ When several reviews exist, the governing one is the latest cycle whose `reviewe
 
 - New findings get new IDs; IDs are never reused.
 - A finding becomes `resolved` only when a later fresh review confirms it, never on the implementer's word.
+- A prior finding that the governing review does not re-check has status `unknown`.
 - A resolved finding is reopened only if a later review restates it.
 
 **Failures:**
@@ -269,11 +290,11 @@ When several reviews exist, the governing one is the latest cycle whose `reviewe
 - A failed validation or environment check is `cause: unexplained` unless evidence identifies the cause. Hypotheses may be listed (application, infrastructure, test fixture, environment), but a hypothesis is not an identified cause.
 - An unexplained failure is never treated as an application defect.
 
-**Disagreement with a verdict:** the assessor may record a Conflict and require a human decision. It never overrides or reinterprets the verdict.
+**Disagreement with a verdict:** the assessor may record an `unresolved` conflict and require a human decision. It never overrides or reinterprets the verdict.
 
-**Resolution by authority order:** a conflict resolved by the authority order in 5.1 (e.g. `[observed]` Git beats a `[reported]` commit) is listed but does not block. A conflict the order cannot resolve caps readiness at `blocked`.
+**Resolution by authority order:** a conflict that the authority order in 5.1 resolves (e.g. `[observed]` Git beats a `[reported]` commit) is listed as `resolved_by_authority`. Any other conflict is `unresolved`.
 
-**Insufficient evidence:** missing items are listed under Missing evidence and set to `unknown`. Nothing is inferred.
+**Insufficient evidence:** missing items are listed under Missing evidence and take their absent-evidence value (3.1). Nothing is inferred.
 
 ### 5.4 Read-only boundary
 
@@ -281,6 +302,7 @@ Assessment never:
 
 - edits files;
 - runs validation or tests;
+- re-runs model resolution;
 - delegates to any agent;
 - runs Git write commands;
 - contacts deployed environments.
@@ -297,27 +319,38 @@ Exactly one is recommended per assessment.
 | --- | --- |
 | `ACCEPT_UNIT` | Ask the user to accept the completed bounded unit |
 | `REMEDIATE_FINDINGS` | Fix identified findings, unmet criteria, or failures with an identified cause (scoped to listed IDs/causes) |
-| `VERIFY_FURTHER` | Obtain missing verification: re-run validation, independent review or re-review, environment check, or re-run model resolution for a recorded window |
+| `VERIFY_FURTHER` | Obtain missing verification: validation re-run, independent review or re-review through the normal workflow, environment check, or locating missing evidence |
 | `INVESTIGATE_FAILURE` | Establish the cause of an unexplained failure before any remediation |
 | `RECONCILE_DOCS` | Bring SPEC/doc state in line with the repository (e.g. SPEC status, PRODUCT.md current state) |
 | `PREPARE_NEXT_UNIT` | Prepare the next unit of an approved split; only after `[human]` acceptance of the current unit |
 | `REQUEST_HUMAN_DECISION` | A product, security, release, provenance, or conflict judgment only the user can make |
 
-### 6.2 Decision rules (first match wins; exhaustive)
+### 6.2 Decision rules (first match wins)
 
-1. An unresolved conflict (5.3): `REQUEST_HUMAN_DECISION`.
-2. Review `blocked` with `REVIEW_BLOCKED_MODEL_RESOLUTION`. The family is never guessed, and the helper never proposes a reviewer family.
-   - **Setup-class reason, both checkpoints recorded:** `VERIFY_FURTHER`. The setup-class reasons are `SQLITE3_NOT_FOUND`, `DB_NOT_FOUND`, `DB_NOT_READABLE`, `COMBO_NOT_FOUND`, `RESOLVER_UNAVAILABLE`, `REVIEW_ROUTE_HELPER_UNAVAILABLE`, `RUNTIME_ERROR`, or `RESOLVER_OUTPUT_INVALID`, with valid `start_id` and `end_id` in the orchestrator report. Prerequisite: the user fixes setup (`/doctor` hints). The user then re-runs `review-route.sh resolve <start_id> <end_id> <alias>` for the recorded window and uses only the reviewer it returns.
-   - **Any other reason:** `REQUEST_HUMAN_DECISION`. This covers `MODEL_DETECTION_AMBIGUOUS`, `MODEL_DETECTION_FAILED`, `MODEL_ATTRIBUTION_UNKNOWN`, `MODEL_FAMILY_UNKNOWN`, `MODEL_PARSE_FAILED`, `UNSAFE_OUTPUT_VALUE`, `INVALID_CHECKPOINT`, `INVALID_WINDOW`, `START_CHECKPOINT_FAILED`, `END_CHECKPOINT_FAILED`, any unlisted reason, or missing checkpoints. Runtime provenance for that run cannot be obtained afterwards.
-3. `implementation` is `incomplete` or `none`: `REQUEST_HUMAN_DECISION`. Resuming, re-splitting, or abandoning the unit is the user's call.
-4. Any other `blocked` cap (missing, `unknown`, or `stale` evidence): `VERIFY_FURTHER`, naming the evidence to obtain.
-5. A failure with `cause: unexplained`: `INVESTIGATE_FAILURE`.
-6. Any of `CHANGES_REQUIRED`, an open blocking finding, an acceptance criterion `not_met`, or a failure with `cause: identified(...)`: `REMEDIATE_FINDINGS`, scoped to the listed IDs/causes. A `test-fixture` cause scopes remediation to the fixture, not application code.
-7. A required validation `partial` or `not_run`, a required environment `pending`, or an acceptance criterion `unverified`: `VERIFY_FURTHER`.
+1. Any conflict `unresolved`: `REQUEST_HUMAN_DECISION`.
+2. `review = blocked(...)`, for any status and any reason: `REQUEST_HUMAN_DECISION`. Rationale:
+   - Resolution reads the *current* `usageHistory` rows and `combos` definition. A later retry can see different database contents, a different combo definition, or different attribution evidence than existed at implementation time, and nothing records that they are unchanged.
+   - Provenance therefore cannot be established after the fact by the Decision Helper.
+   - The helper never recommends re-resolution, never proposes a reviewer or family, and never treats the unit as reviewed. Existing fail-closed behavior is unchanged. How to establish provenance (for example fixing setup via `/doctor` hints and re-running the unit with fresh checkpoints) is the user's decision.
+3. `implementation ∈ {incomplete, none}`: `REQUEST_HUMAN_DECISION`. Resuming, re-splitting, or abandoning the unit is the user's call.
+4. Readiness `blocked` (the remaining causes are I1, I2, I3 `pending`/`stale`/`unknown`, I4, I6, I9 and I10 status `unknown`): `VERIFY_FURTHER`, naming the evidence to obtain.
+5. A required validation or required environment is `failed(unexplained)`: `INVESTIGATE_FAILURE`.
+6. Any of: `review = CHANGES_REQUIRED`; an `open` finding with severity `blocking` or `unknown`; an acceptance criterion `not_met`; a required validation or environment `failed(identified:<category>)`. Action: `REMEDIATE_FINDINGS`, scoped to the listed open IDs and causes. An `identified:test-fixture` cause scopes remediation to the fixture, not application code.
+7. Any of: a required validation `partial` or `not_run`; a required environment `pending`; an acceptance criterion `unverified`. Action: `VERIFY_FURTHER`.
 8. An acceptance criterion `needs_human_decision`: `REQUEST_HUMAN_DECISION`, naming the authority from 3.1.
-9. SPEC or documentation state out of sync with the repository: `RECONCILE_DOCS`.
-10. Readiness `ready` or `ready_with_notes`: `ACCEPT_UNIT`. If a `[human]` acceptance of this unit is already recorded and an approved split has a next unit, the action is `PREPARE_NEXT_UNIT` instead.
-11. Anything else: `REQUEST_HUMAN_DECISION` (fail closed).
+9. `doc_state = out_of_sync`: `RECONCILE_DOCS`.
+10. Readiness `ready` or `ready_with_notes`:
+    - `human_acceptance = not_recorded`: `ACCEPT_UNIT`.
+    - `human_acceptance = recorded` and `next_unit = available`: `PREPARE_NEXT_UNIT`.
+    - `human_acceptance = recorded` and `next_unit ∈ {none, unknown}`: `REQUEST_HUMAN_DECISION` (close the SPEC or define the next unit).
+11. Anything else: `REQUEST_HUMAN_DECISION` (fail-closed guard).
+
+**Coverage argument.** Readiness `blocked` is caught by rules 1, 2 or 4. `not_ready` is caught by rules 3, 5, 6 or 7, because every `not_ready` cap in 3.3 is named in one of them. `needs_human_decision` is caught by rule 8. `ready_with_notes` and `ready` are caught by rules 9 or 10. Rule 11 is therefore unreachable and exists only as a guard. Section 9.2 records the mechanical check of this argument.
+
+**Invariants:**
+
+- `ACCEPT_UNIT` and `PREPARE_NEXT_UNIT` are produced only by rule 10, which requires readiness `ready` or `ready_with_notes`.
+- `CHANGES_REQUIRED`, `stale`, `pending`, `unknown` and `blocked(...)` reviews cap readiness at `not_ready` or `blocked`, so they can never produce an acceptance recommendation.
 
 ### 6.3 Output block
 
@@ -335,21 +368,21 @@ Decision Helper (advisory only — nothing has been executed):
 
 ### 6.4 Hard rules
 
-- The Decision Helper never executes, delegates, or schedules its recommendation. The turn ends after the block.
+- The Decision Helper never executes, delegates, schedules, or retries its recommendation. The turn ends after the block.
 - Each next action requires a new explicit user command, for example `/implement-spec` for remediation or `/review-change` for re-review.
 - It never initiates implementation, push, merge, deployment, history rewrite, or production changes. These may appear only as steps the user performs, with the required explicit authorization named.
 - It runs after the OpenCode orchestrator's "stop after the first review verdict" point and also stops.
-- Its output is not authorization for the portable remediation loop described in [commands/implement-spec.md](../../commands/implement-spec.md) step 14 and [AGENTS.md](../../AGENTS.md) step 11 (see 7.1 and D7).
+- Its output is not authorization for the portable remediation loop still described in [commands/implement-spec.md](../../commands/implement-spec.md) step 14 and [AGENTS.md](../../AGENTS.md) step 11 until U4 lands D7 (7.1).
 
 ## 7. Integration architecture (minimal)
 
 | Change | File(s) | Kind |
 | --- | --- | --- |
-| Portable contract: dimensions, labels, readiness caps, verdict mapping, freshness, action set, decision rules. Single source; other files reference it | `policies/verification-assessment.md` (new) | control-plane |
+| Portable contract: input domains, labels, readiness caps, verdict mapping, freshness, action set, decision rules. Single source; other files reference it | `policies/verification-assessment.md` (new) | control-plane |
 | Portable procedure for assessment + Decision Helper | `commands/assess-change.md` (new) | control-plane |
-| OpenCode `/assess` command: `agent: orchestrator`, `subagent: false`; text forbids delegation, edits, validation runs, and Git writes; emits the 5.2 and 6.3 blocks | `integrations/opencode/commands/assess.md` (new) | control-plane |
+| OpenCode `/assess` command: `agent: orchestrator`, `subagent: false`; text forbids delegation, edits, validation runs, re-resolution, and Git writes; emits the 5.2 and 6.3 blocks | `integrations/opencode/commands/assess.md` (new) | control-plane |
 | Final report appends the Assessment and Decision Helper blocks (also for blocked outcomes); OpenCode "stop" wording unchanged | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md) step 18, [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) "Orchestration report fields" | control-plane |
-| Portable stop-semantics reconciliation (7.1, subject to D7) | [commands/implement-spec.md](../../commands/implement-spec.md) step 14, [AGENTS.md](../../AGENTS.md) step 11 | control-plane |
+| Portable stop-after-verdict semantics (D7, 7.1) | [commands/implement-spec.md](../../commands/implement-spec.md) step 14, [AGENTS.md](../../AGENTS.md) step 11 | control-plane |
 | Manifest +`commands/assess.md`; `NMAN` 14→15 plus an assess block modeled on the handoff block; README install list 14→15 | [sync-install.sh](../../integrations/opencode/scripts/sync-install.sh), [test-sync-install.sh](../../integrations/opencode/scripts/test-sync-install.sh), [integrations/opencode/README.md](../../integrations/opencode/README.md) | control-plane |
 | Annotation conventions, two new lines, model/family wording (section 4) | [templates/implementation-handoff.md](../../templates/implementation-handoff.md), [templates/review-report.md](../../templates/review-report.md) | contract |
 | One workflow step: "Assess verification state and record an advisory next-action recommendation; do not execute it." | [AGENTS.md](../../AGENTS.md), [README.md](../../README.md) | control-plane |
@@ -368,7 +401,7 @@ Unchanged:
 
 Portability: the contract and procedure live in `policies/` and `commands/` and do not depend on OpenCode. The OpenCode command is a thin adapter, consistent with the existing split.
 
-### 7.1 Portable stop-after-verdict reconciliation (specified, not implemented here)
+### 7.1 Portable stop-after-verdict semantics (D7: approved, implemented in U4)
 
 The portable contract and the OpenCode adapter currently disagree:
 
@@ -376,19 +409,19 @@ The portable contract and the OpenCode adapter currently disagree:
 - [AGENTS.md](../../AGENTS.md) core workflow step 11 says "Fix material findings, validate, commit, and re-review".
 - The OpenCode orchestrator says "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict."
 
-Phase A's advisory model matches the OpenCode behavior. The portable contract must be reconciled so that remediation and re-review happen only as a new, explicitly user-initiated bounded unit (typically after a `REMEDIATE_FINDINGS` recommendation), never as an automatic loop.
+**Decision D7 (approved):** the portable `/implement-spec` contract adopts stop-after-verdict semantics. `CHANGES_REQUIRED` must not trigger automatic remediation. Fixes and re-review run only as a new, explicitly user-initiated bounded unit, typically after a `REMEDIATE_FINDINGS` recommendation.
 
 Proposed wording for both portable files: "If `CHANGES_REQUIRED`, stop and report; fixes and re-review run only as a new explicit user-initiated unit."
 
-This edits the highest-authority repository contract ([AGENTS.md](../../AGENTS.md)), so it requires approval (D7). It is scheduled in U4 and is **not implemented by this SPEC change**. Until reconciled, the Decision Helper's output must not be read as triggering the portable loop (6.4).
+This change is assigned to U4 and is **not made by this SPEC change**; the operational command files are untouched here. Until U4 lands, 6.4 states that the Decision Helper's output does not trigger the portable loop.
 
 ## 8. Acceptance criteria
 
 **A1 — State contract (`policies/verification-assessment.md`)**
 
-- AC-A1.1 Defines the dimensions, value sets (each including `unknown`), and evidence labels exactly as in 3.1–3.2, including the `needs_human_decision` vs `unverified` rule.
-- AC-A1.2 Defines readiness by the cap table in 3.3. Every value of every dimension has a cap entry, and `unknown` never satisfies a requirement.
-- AC-A1.3 Contains the verdict mapping in 3.4. `CHANGES_REQUIRED`, `stale`, and `REVIEW_BLOCKED_MODEL_RESOLUTION` cannot yield `ACCEPT_UNIT`.
+- AC-A1.1 Defines inputs I1–I14 with the closed domains and absent-evidence values in 3.1, the evidence labels in 3.2, and the `needs_human_decision` vs `unverified` rule.
+- AC-A1.2 Defines readiness by the cap table in 3.3: every value of every input has exactly one row, readiness is the most severe cap, and absent evidence never satisfies a requirement.
+- AC-A1.3 Contains the verdict mapping in 3.4. `CHANGES_REQUIRED`, `stale`, and any `blocked(...)` review cannot yield `ACCEPT_UNIT`.
 - AC-A1.4 States that verdict text and existing block statuses/reasons are passed through verbatim.
 
 **A2 — Evidence handoff**
@@ -396,7 +429,7 @@ This edits the highest-authority repository contract ([AGENTS.md](../../AGENTS.m
 - AC-A2.1 The handoff template gains only the annotation conventions and the two new lines in 4.2. No existing field is removed or duplicated.
 - AC-A2.2 The template states 4.3: the child writes `pending (orchestrator resolution)`, and the orchestrator report is the authoritative provenance.
 - AC-A2.3 The review template gains optional finding IDs and a `Prior findings status:` line. The verdict line is unchanged.
-- AC-A2.4 The policy states 4.4: un-annotated or old handoffs assess as `unknown` and fail closed.
+- AC-A2.4 The policy states 4.4: un-annotated or old handoffs fail closed.
 
 **A3 — Assessment**
 
@@ -404,16 +437,16 @@ This edits the highest-authority repository contract ([AGENTS.md](../../AGENTS.m
 - AC-A3.2 The procedure states the input authority order and assessed-commit rule (5.1), and the 5.3 rules:
   - freshness is decided solely by `reviewed_commit` vs the assessed commit;
   - a handoff mismatch is a conflict, not staleness;
-  - finding identity across cycles;
+  - finding identity across cycles, including `not re-checked` → `unknown`;
   - failure-cause classification.
 - AC-A3.3 The procedure and `/assess` state the read-only boundary in 5.4.
 
 **A4 — Decision Helper**
 
 - AC-A4.1 The action set is closed (6.1), and exactly one action is recommended.
-- AC-A4.2 The decision rules match 6.2, including the resolver-reason split and the fail-closed fallback.
+- AC-A4.2 The decision rules match 6.2. Every `blocked(...)` review maps to `REQUEST_HUMAN_DECISION`, with no retry or re-resolution recommendation.
 - AC-A4.3 The output block matches 6.3, including Required authorization.
-- AC-A4.4 `/assess` and the OpenCode `/implement-spec` and orchestrator state that the recommendation is never executed, and that push/merge/deploy/history rewrite/production changes are never initiated.
+- AC-A4.4 `/assess` and the OpenCode `/implement-spec` and orchestrator state that the recommendation is never executed or retried, and that push/merge/deploy/history rewrite/production changes are never initiated.
 
 **Integration**
 
@@ -421,52 +454,360 @@ This edits the highest-authority repository contract ([AGENTS.md](../../AGENTS.m
 - AC-I.2 `test-doctor.sh`, `test-review-route.sh`, and `test-resolve-model-family.sh` pass unchanged.
 - AC-I.3 OpenCode `/implement-spec` step 19 and the orchestrator "stop after the first verdict" wording are unchanged.
 - AC-I.4 Checkpoint and resolution wording is unchanged.
-- AC-I.5 After D7 approval, portable `commands/implement-spec.md` step 14 and `AGENTS.md` step 11 no longer describe automatic remediation or re-review (7.1).
+- AC-I.5 Portable `commands/implement-spec.md` step 14 and `AGENTS.md` step 11 no longer describe automatic remediation or re-review (D7, U4).
 
 **A5 — Regression scenarios**
 
-- AC-A5.1 The fixtures in section 9 exist, each labeled with its basis.
+- AC-A5.1 The fixtures in 9.1 exist as files, each with the complete input state, expected readiness, expected decision, rule references, `must_not_decide`, and the basis label.
 - AC-A5.2 `test-assessment-fixtures.sh` checks:
-  - required keys;
-  - enum values against the policy file;
+  - every input I1–I14 is present;
+  - values are within the 3.1 domains;
   - `ACCEPT_UNIT` only with readiness `ready`/`ready_with_notes`;
-  - never `ACCEPT_UNIT` with `CHANGES_REQUIRED`, `stale`, or a blocked review;
+  - never `ACCEPT_UNIT` with `CHANGES_REQUIRED`, `stale`, or a `blocked(...)` review;
   - `expected_decision` not in `must_not_decide`.
 
 ## 9. Historical regression scenarios (A5)
 
 **Basis:** no execution records from the Huellas repository are available in this repository. Each scenario below is an **assumption-based fixture** derived from the summary in the task brief, not a historical record. The fixture files must carry `basis: assumption-based fixture (not a historical record)`.
 
-Fixture format (`examples/assessment/S<id>-<slug>.md`, Markdown with a key: value header the structural test reads):
+### 9.1 Fixtures (complete input state)
+
+**Notation:**
+
+- Lists use `name=value`, separated by `; `.
+- `validation` and `environments` list *required* items. Non-required items, where present, go in `validation_optional` and `environments_optional`.
+- `review` is `<value>@<reviewed_commit>`. Freshness is computed against `assessed_commit` (5.3).
+- `findings` are `id=status/severity`. `conflicts` is `none` or a list of `id=resolved_by_authority|unresolved`.
+- `rules` cites the governing 3.3 caps and the 6.2 rule.
+
+Fixture files (`examples/assessment/<fixture>.md`) contain exactly these keys, followed by an illustrative evidence excerpt.
 
 ```text
-fixture: S4b-supabase-otp-fixture-confirmed
+fixture: S1-bootstrap-multi-cycle
 basis: assumption-based fixture (not a historical record)
-review: <verdict or status>
+scenario: Repository bootstrap; cycles 1-2 CHANGES_REQUIRED; cycle 3 PASS confirms all prior findings resolved
+assessed_commit: C3
+implementation: complete
+review: PASS@C3
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met; AC-2=met
+findings: R1-1=resolved/blocking; R1-2=resolved/non-blocking; R2-1=resolved/blocking
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: ready
+expected_decision: ACCEPT_UNIT
+rules: 3.3 no cap; 6.2 rule 10
+must_not_decide: REMEDIATE_FINDINGS, PREPARE_NEXT_UNIT
+```
+
+```text
+fixture: S2-auth-production-pending
+basis: assumption-based fixture (not a historical record)
+scenario: Authentication implemented; automated validation and review pass; production verification incomplete
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: production=pending
+acceptance: AC-login-local=met; AC-login-production=unverified
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: not_ready
+expected_decision: VERIFY_FURTHER
+rules: 3.3 I6 pending, I9 unverified -> not_ready; 6.2 rule 7
+must_not_decide: ACCEPT_UNIT, REMEDIATE_FINDINGS
+```
+
+```text
+fixture: S3-logout-user-facing-ac
+basis: assumption-based fixture (not a historical record)
+scenario: Logout works technically; review finds the user-facing acceptance criterion unmet
+assessed_commit: C1
+implementation: complete
+review: CHANGES_REQUIRED@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-logout-session-cleared=met; AC-logout-user-feedback=not_met
+findings: R1-1=open/blocking
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
 expected_readiness: not_ready
 expected_decision: REMEDIATE_FINDINGS
-remediation_scope: test fixture only
+rules: 3.3 I3 CHANGES_REQUIRED, I9 not_met, I10 open/blocking -> not_ready; 6.2 rule 6 (scope R1-1)
+must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
+```
+
+```text
+fixture: S4a-otp-failure-unexplained
+basis: assumption-based fixture (not a historical record)
+scenario: Supabase OTP check fails in the Supabase test environment; cause not established (hypotheses: test fixture, provider infrastructure, application)
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: supabase-test=failed(unexplained)
+acceptance: AC-otp-login=unverified
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: not_ready
+expected_decision: INVESTIGATE_FAILURE
+rules: 3.3 I6 failed, I9 unverified -> not_ready; 6.2 rule 5
+must_not_decide: ACCEPT_UNIT, REMEDIATE_FINDINGS
+```
+
+```text
+fixture: S4b-otp-failure-supabase-fixture-confirmed
+basis: assumption-based fixture (not a historical record)
+scenario: Same failure after investigation; evidence identifies the repository's Supabase test fixture (OTP test user/seed data); application code path not implicated
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: supabase-test=failed(identified:test-fixture)
+acceptance: AC-otp-login=unverified
+findings: I-1=open/blocking
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: not_ready
+expected_decision: REMEDIATE_FINDINGS
+rules: 3.3 I6 failed, I9 unverified, I10 open/blocking -> not_ready; 6.2 rule 6 (scope: test fixture only)
 must_not_decide: ACCEPT_UNIT, INVESTIGATE_FAILURE
 ```
 
-The header is followed by the input evidence (handoff excerpt, review report excerpt, Git facts) and the expected Assessment block.
+```text
+fixture: S5a-security-check-unverified
+basis: assumption-based fixture (not a historical record)
+scenario: Authentication works; the objective exposure check (no secret or service-role key reaches the client) has not been performed
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-auth-functional=met; AC-sec-no-client-secrets=unverified
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: not_ready
+expected_decision: VERIFY_FURTHER
+rules: 3.3 I9 unverified -> not_ready; 6.2 rule 7
+must_not_decide: ACCEPT_UNIT, REQUEST_HUMAN_DECISION
+```
 
-| ID | Scenario | Key evidence (fixture) | Expected readiness | Expected decision | Must not decide |
-| --- | --- | --- | --- | --- | --- |
-| S1 | Repository bootstrap after multiple review cycles | Cycles 1–2 `CHANGES_REQUIRED` (R1-\*, R2-\*); cycle 3 `PASS` with `reviewed_commit == assessed_commit`; cycle 3 confirms prior findings resolved; required validation passed | `ready` | `ACCEPT_UNIT` | `REMEDIATE_FINDINGS` |
-| S2 | Auth implemented; production verification incomplete | Validation passed; review `PASS` (fresh); AC "login works in production" `unverified`; `production` `pending` | `not_ready` | `VERIFY_FURTHER` (authorization: user performs or authorizes the production check) | `ACCEPT_UNIT` |
-| S3 | Logout remediation | Technical logout exists, tests pass; review `CHANGES_REQUIRED` with R1-1: user-facing AC (e.g. confirmation/redirect wording) `not_met` | `not_ready` | `REMEDIATE_FINDINGS` (scoped to R1-1) | `ACCEPT_UNIT` |
-| S4a | OTP authentication failure, cause not yet established | Supabase OTP integration test fails; `cause: unexplained`; hypotheses listed (fixture/data, provider infrastructure, application) | `not_ready` | `INVESTIGATE_FAILURE` | `ACCEPT_UNIT`, `REMEDIATE_FINDINGS` |
-| S4b | Same failure, cause confirmed as a Supabase test fixture | Investigation evidence identifies the repository's test fixture (e.g. misconfigured OTP test user/seed data for the Supabase test project); the application code path is not implicated; `cause: identified(test-fixture)` | `not_ready` | `REMEDIATE_FINDINGS` (scope: test fixture only) | `ACCEPT_UNIT`, `INVESTIGATE_FAILURE` |
-| S5a | Security exposure check not yet performed | Functional ACs `met`, review `PASS`; security AC "no secret/service-role key exposed to the client" `unverified` | `not_ready` | `VERIFY_FURTHER` | `ACCEPT_UNIT`, `REQUEST_HUMAN_DECISION` |
-| S5b | Security acceptance pending sign-off | Functional ACs `met`; exposure check `met` `[observed]`; security acceptance AC (residual-risk sign-off by the security owner) `needs_human_decision` | `needs_human_decision` | `REQUEST_HUMAN_DECISION` (authority: security owner) | `ACCEPT_UNIT` |
-| S6 | New review findings vs resolved findings | Cycle 2 `CHANGES_REQUIRED` (fresh) with new R2-1..R2-2; cycle 2 marks R1-\* resolved | `not_ready` | `REMEDIATE_FINDINGS` scoped to R2-\* only; R1-\* not reopened | `ACCEPT_UNIT` |
-| S7 | Fail closed: old-format handoff | Handoff without annotations or the two new lines; no AC or environment evidence | `blocked` | `VERIFY_FURTHER` | `ACCEPT_UNIT` |
-| S8a | Fail closed: attribution ambiguity | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `MODEL_DETECTION_AMBIGUOUS` | `blocked` | `REQUEST_HUMAN_DECISION` | `ACCEPT_UNIT`, `VERIFY_FURTHER` |
-| S8b | Fail closed: correctable resolver setup | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `RESOLVER_UNAVAILABLE`; `start_id`/`end_id` recorded | `blocked` | `VERIFY_FURTHER` (fix setup, re-resolve recorded window) | `ACCEPT_UNIT` |
-| S9 | Fail closed: stale review | Review `PASS` for commit A; assessed commit B (a later fix commit) | `blocked` | `VERIFY_FURTHER` (re-review B) | `ACCEPT_UNIT` |
+```text
+fixture: S5b-security-acceptance-pending
+basis: assumption-based fixture (not a historical record)
+scenario: Authentication works and the exposure check passed; residual-risk acceptance requires the security owner's sign-off
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-auth-functional=met; AC-sec-no-client-secrets=met; AC-sec-risk-signoff=needs_human_decision
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: needs_human_decision
+expected_decision: REQUEST_HUMAN_DECISION
+rules: 3.3 I9 needs_human_decision; 6.2 rule 8 (authority: security owner)
+must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
+```
 
-The structural test validates the fixtures' internal consistency against the policy. It does not run an LLM. Behavioral checking of an orchestrator's assessment against these fixtures is a manual step in each unit's review until a deterministic reducer exists (open decision D1).
+```text
+fixture: S6-new-vs-resolved-findings
+basis: assumption-based fixture (not a historical record)
+scenario: Cycle 2 review confirms cycle-1 findings resolved and raises new findings
+assessed_commit: C2
+implementation: complete
+review: CHANGES_REQUIRED@C2
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met; AC-2=not_met
+findings: R1-1=resolved/blocking; R1-2=resolved/blocking; R2-1=open/blocking; R2-2=open/non-blocking
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: not_ready
+expected_decision: REMEDIATE_FINDINGS
+rules: 3.3 I3 CHANGES_REQUIRED, I9 not_met, I10 open/blocking -> not_ready; 6.2 rule 6 (scope R2-1, R2-2; R1-* stay resolved)
+must_not_decide: ACCEPT_UNIT
+```
+
+```text
+fixture: S7-old-format-handoff
+basis: assumption-based fixture (not a historical record)
+scenario: Handoff predates the extension; tests listed without results; no acceptance evidence
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=unknown; typecheck=unknown
+environments: none
+acceptance: AC-1=unknown; AC-2=unknown
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: blocked
+expected_decision: VERIFY_FURTHER
+rules: 3.3 I4 unknown, I9 unknown -> blocked; 6.2 rule 4
+must_not_decide: ACCEPT_UNIT
+```
+
+```text
+fixture: S8a-resolver-attribution-ambiguous
+basis: assumption-based fixture (not a historical record)
+scenario: Review required; resolution blocked because both families appear in the window
+assessed_commit: C1
+implementation: complete
+review: blocked(REVIEW_BLOCKED_MODEL_RESOLUTION,MODEL_DETECTION_AMBIGUOUS)@none
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: blocked
+expected_decision: REQUEST_HUMAN_DECISION
+rules: 3.3 I3 blocked -> blocked; 6.2 rule 2
+must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
+```
+
+```text
+fixture: S8b-resolver-setup-failure
+basis: assumption-based fixture (not a historical record)
+scenario: Review required; checkpoints recorded but resolution blocked by missing resolver tooling; a later retry could read changed usage rows or combo definitions
+assessed_commit: C1
+implementation: complete
+review: blocked(REVIEW_BLOCKED_MODEL_RESOLUTION,RESOLVER_UNAVAILABLE)@none
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: blocked
+expected_decision: REQUEST_HUMAN_DECISION
+rules: 3.3 I3 blocked -> blocked; 6.2 rule 2
+must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
+```
+
+```text
+fixture: S9-stale-review
+basis: assumption-based fixture (not a historical record)
+scenario: PASS was given for commit C1; a later fix commit C2 is being assessed
+assessed_commit: C2
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: blocked
+expected_decision: VERIFY_FURTHER
+rules: 3.3 I3 stale -> blocked; 6.2 rule 4 (re-review C2)
+must_not_decide: ACCEPT_UNIT
+```
+
+```text
+fixture: S10-accepted-next-unit
+basis: assumption-based fixture (not a historical record)
+scenario: Unit passed with notes and the user has accepted it; the approved split has a next unit
+assessed_commit: C1
+implementation: complete
+review: PASS_WITH_NOTES@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met
+findings: R1-1=open/non-blocking
+conflicts: none
+doc_state: in_sync
+human_acceptance: recorded
+next_unit: available
+expected_readiness: ready_with_notes
+expected_decision: PREPARE_NEXT_UNIT
+rules: 3.3 I3 PASS_WITH_NOTES, I10 open/non-blocking -> ready_with_notes; 6.2 rule 10
+must_not_decide: ACCEPT_UNIT
+```
+
+```text
+fixture: S11-docs-out-of-sync
+basis: assumption-based fixture (not a historical record)
+scenario: Unit fully verified, but the SPEC status still reads Draft
+assessed_commit: C1
+implementation: complete
+review: PASS@C1
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=met
+findings: none
+conflicts: none
+doc_state: out_of_sync
+human_acceptance: not_recorded
+next_unit: none
+expected_readiness: ready_with_notes
+expected_decision: RECONCILE_DOCS
+rules: 3.3 I12 out_of_sync -> ready_with_notes; 6.2 rule 9
+must_not_decide: ACCEPT_UNIT
+```
+
+```text
+fixture: S12-implementation-incomplete
+basis: assumption-based fixture (not a historical record)
+scenario: The implementation child stopped before finishing the unit; partial changes are committed
+assessed_commit: C1
+implementation: incomplete
+review: pending@none
+validation: tests=passed; typecheck=passed; lint=passed
+environments: none
+acceptance: AC-1=unverified
+findings: none
+conflicts: none
+doc_state: in_sync
+human_acceptance: not_recorded
+next_unit: available
+expected_readiness: blocked
+expected_decision: REQUEST_HUMAN_DECISION
+rules: 3.3 I3 pending -> blocked, I2 incomplete -> not_ready; 6.2 rule 3
+must_not_decide: ACCEPT_UNIT, VERIFY_FURTHER
+```
+
+### 9.2 Reducibility check (performed for revision 3)
+
+A throwaway reducer, kept outside the repository and not part of Phase A, encoded 3.3 and 6.2 literally. It was used for two checks:
+
+1. **Fixtures:** it parsed all 15 fixtures in 9.1 and recomputed readiness, decision, and the governing 6.2 rule. For every fixture, the required keys and basis label were present, the recomputed readiness and decision matched `expected_readiness` and `expected_decision`, the rule matched the cited `rules`, and the decision was not in `must_not_decide`.
+2. **State space:** it enumerated 71,124,480 states. Each list input took either the empty list or one item, over the full 3.1 domains; one item per list is sufficient because caps take the maximum over items and every list rule is "any item". I7 was omitted because no cap or rule reads it. The results:
+   - rule 11 was never reached;
+   - no state whose review is anything other than `PASS`, `PASS_WITH_NOTES` or `not_required` produced `ACCEPT_UNIT` or `PREPARE_NEXT_UNIT`, and neither action was produced from readiness other than `ready`/`ready_with_notes`;
+   - no state with absent evidence in a required input produced either action. The required inputs checked were `assessed_commit`, `implementation`, `review`, required validation, required environment, acceptance, and finding status.
+
+Unit U1's `test-assessment-fixtures.sh` performs structural checks only (AC-A5.2). Whether to commit a reducer remains open decision D1.
 
 ## 10. Implementation sequence
 
@@ -474,61 +815,71 @@ One unit per `/implement-spec`, sequential, each `standard` or higher, each inde
 
 | Unit | Delivers | Depends on | Validation |
 | --- | --- | --- | --- |
-| **U1** | `policies/verification-assessment.md`; the section 9 fixtures in `examples/assessment/`; `integrations/opencode/scripts/test-assessment-fixtures.sh` | — | New test passes; existing four suites pass; no behavior change |
+| **U1** | `policies/verification-assessment.md`; the 9.1 fixtures in `examples/assessment/`; `integrations/opencode/scripts/test-assessment-fixtures.sh` | — | New test passes; existing four suites pass; no behavior change |
 | **U2** | Template annotation conventions, two new lines, model/family wording (section 4) | U1 | `git diff` shows no removed fields; links resolve; suites pass |
 | **U3** | `commands/assess-change.md`, `integrations/opencode/commands/assess.md`, manifest +1, `test-sync-install.sh` update, README install list | U1 | `test-sync-install.sh` (`NMAN=15`) and `test-doctor.sh` pass; manual `/assess` on S2, S4a and S4b inputs matches the fixtures |
-| **U4** | OpenCode `/implement-spec` and orchestrator report integration; AGENTS.md and README workflow step; portable stop-semantics reconciliation (7.1) if D7 is approved | U3, D7 | Checkpoint/resolution/OpenCode stop wording diff-checked as unchanged; AC-I.5; suites pass; manual run shows the block and stops |
+| **U4** | OpenCode `/implement-spec` and orchestrator report integration; AGENTS.md and README workflow step; portable stop-after-verdict semantics (D7, 7.1) | U3 | Checkpoint/resolution/OpenCode stop wording diff-checked as unchanged; AC-I.5; suites pass; manual run shows the block and stops |
 | **U5** | PRODUCT.md CURRENT STATE update; SPEC status → Implemented | U4 | Links resolve; content describes only implemented behavior |
 
 **Recommended first unit:** U1. It is a pure contract plus tests and changes no runtime behavior.
 
-## 11. Risks, open questions, and decisions requiring approval
+## 11. Decisions, open questions, and risks
 
-| ID | Item | Default in this SPEC |
+| ID | Item | Status |
 | --- | --- | --- |
-| D1 | Deterministic reducer script (key=value in, readiness + decision out) to make rules executable | Deferred; Markdown contract + structural fixture test (user decision) |
-| D2 | `/assess` runs on the orchestrator agent, so "no delegation" is enforced by instruction rather than permissions. Alternative: a dedicated narrowly-permissioned agent like `doctor` | Orchestrator agent; revisit if review finds it insufficient |
-| D3 | Fixture location `examples/assessment/` and test in `integrations/opencode/scripts/` (where all suites live), though the contract is portable | As stated |
-| D4 | `PREPARE_NEXT_UNIT` requires a recorded `[human]` acceptance of the current unit | Required |
-| D5 | Environment names are project-defined; projects without a definition have no required environments beyond those named by acceptance criteria | As stated |
-| D6 | Adopt `docs/specs/` as the repository's SPEC location convention | **Open**: proposed, pending user approval; not established by this draft |
-| D7 | Reconcile portable `commands/implement-spec.md` step 14 and `AGENTS.md` step 11 with the stop-after-verdict behavior (7.1) | **Open**: proposed for U4; not implemented until approved |
+| D1 | Deterministic reducer script (key=value in, readiness + decision out) to make rules executable | **Open**; default: deferred, Markdown contract + structural fixture test |
+| D2 | `/assess` runs on the orchestrator agent, so "no delegation" is enforced by instruction rather than permissions. Alternative: a dedicated narrowly-permissioned agent like `doctor` | **Open**; default: orchestrator agent |
+| D3 | Fixture location `examples/assessment/` and test in `integrations/opencode/scripts/` (where all suites live), though the contract is portable | **Open**; default as stated |
+| D4 | `PREPARE_NEXT_UNIT` requires a recorded `[human]` acceptance of the current unit | **Open**; default: required |
+| D5 | Environment names are project-defined; required environments are only those named by acceptance criteria or project `AGENTS.md` | **Open**; default as stated |
+| D6 | `docs/specs/` is the location for Phase A specifications | **Approved** by the user (review cycle 3 authorization) |
+| D7 | The portable `/implement-spec` contract adopts stop-after-verdict semantics; `CHANGES_REQUIRED` never triggers automatic remediation (7.1) | **Approved** by the user (review cycle 3 authorization); implementation assigned to U4 |
 
 Risks:
 
-- **LLM rule-application drift without a reducer.** Mitigation: a single-source policy, an exhaustive cap table, fixed output blocks, fixtures, and manual fixture checks in review.
+- **LLM rule-application drift without a committed reducer.** Mitigation: a single-source policy, a total cap table, fixed output blocks, complete fixtures, and manual fixture checks in review.
 - **Longer orchestrator reports.** Mitigation: fixed compact blocks, with `none` for empty fields.
-- **Recommendation mistaken for authorization.** Mitigation: an explicit "advisory only — nothing has been executed" header, a Required authorization line, no continuation, and D7.
-- **Portable/OpenCode stop semantics differ until D7 lands.** Mitigation: 6.4 explicitly denies that the recommendation authorizes the portable loop.
+- **Recommendation mistaken for authorization.** Mitigation: an explicit "advisory only — nothing has been executed" header, a Required authorization line, and no continuation or retry.
+- **Portable/OpenCode stop semantics differ until U4 lands D7.** Mitigation: 6.4.
 - **Old evidence over-trusted.** Mitigation: commit-bound evidence and `stale`.
-- **Re-resolving a recorded window later (rule 6.2.2) depends on the current combo definition.** Mitigation: confidence is reported as `medium` when combos may have changed since the run.
-- **9Router attribution ambiguity remains** (a known limitation in [docs/PRODUCT.md](../PRODUCT.md)). Phase A surfaces it as `blocked` review and does not resolve it.
+- **Every resolver block now requires a human decision, including simple setup failures.** This is deliberate: provenance cannot be re-established safely after the fact (6.2 rule 2). Expect more human prompts when setup is broken; `/doctor` remains the remedy for setup itself.
+- **9Router attribution ambiguity remains** (a known limitation in [docs/PRODUCT.md](../PRODUCT.md)). Phase A surfaces it as a `blocked` review and does not resolve it.
 
 ## 12. Review cycle record
 
-Cycle 1: `review-openai` on commit `7ae7ba9`, verdict `CHANGES_REQUIRED`. Disposition in revision 2:
+**Cycle 1:** `review-openai` on commit `7ae7ba9`, verdict `CHANGES_REQUIRED`. Disposition in revision 2, with the cycle-2 reviewer's status:
+
+| ID | Severity | Finding (short) | Revision 2 disposition | Cycle-2 status |
+| --- | --- | --- | --- | --- |
+| R1 | blocking | Readiness not exhaustive | Partial fix | Still open → R2-1 |
+| R2 | blocking | Handoff extension duplicated fields | Annotations on existing fields; two new lines | Resolved |
+| R3 | blocking | Portable flow permits automatic remediation | Specified in 7.1; now D7 approved, U4 | Resolved |
+| R4 | blocking | OTP fixture contradictory | S4a / S4b | Resolved |
+| R5 | blocking | Staleness overbroad | Freshness by reviewed vs assessed commit | Resolved |
+| R6 | non-blocking | Security fixture semantics | S5a / S5b | Resolved |
+| R7 | non-blocking | Resolver blocks mapped too broadly | Setup vs judgment split | Still open → R2-3 |
+| R8 | non-blocking | Model/family ownership | 4.3 | Resolved |
+| R9 | non-blocking | D6 circular | D6 open | Resolved; D6 now approved |
+
+**Cycle 2:** `review-openai` on commit `b207235`, verdict `CHANGES_REQUIRED`. Disposition in revision 3:
 
 | ID | Severity | Finding (short) | Disposition |
 | --- | --- | --- | --- |
-| R1-1 (R1) | blocking | Readiness not exhaustive; `incomplete`/`none` fell through; acceptance lacked `unknown` | Fixed: `unknown` in every dimension (3.1); exhaustive cap table (3.3); decision rule 3 for `incomplete`/`none` |
-| R1-2 (R2) | blocking | Handoff extension duplicated existing fields | Fixed: annotations on existing fields; only two new lines (4.2) |
-| R1-3 (R3) | blocking | Portable flow permits automatic remediation | Specified, not implemented: 7.1, D7, AC-I.5, 6.4; scheduled in U4 |
-| R1-4 (R4) | blocking | OTP fixture scenario contradictory; Supabase missing | Fixed: S4a unexplained → `INVESTIGATE_FAILURE`; S4b confirmed Supabase fixture → scoped `REMEDIATE_FINDINGS`; `failures[]` cause classification (3.1, 5.3) |
-| R1-5 (R5) | blocking | Staleness overbroad | Fixed: freshness solely `reviewed_commit` vs assessed commit; handoff mismatch is a conflict (5.3); S9 added |
-| R1-6 (R6) | non-blocking | Security fixture semantics unclear | Fixed: `needs_human_decision` vs `unverified` rule (3.1); S5a/S5b |
-| R1-7 (R7) | non-blocking | Resolver-blocked mapped too broadly | Fixed: setup-class vs judgment reasons (6.2 rule 2); S8a/S8b |
-| R1-8 (R8) | non-blocking | Model/family handoff ownership | Fixed: 4.3 |
-| R1-9 (R9) | non-blocking | D6 circular | Fixed: D6 open, pending approval |
+| R2-1 | blocking | Readiness not total; `unknown` claims false | Fixed: inputs I1–I14 with closed domains and explicit absent-evidence values (3.1); a total single-rule cap table covering every value, including failure causes and finding status × severity (3.3); readiness output domain stated |
+| R2-2 | blocking | Fixtures lack complete input state | Fixed: every fixture lists I1–I14 (as fixture keys), expected readiness, expected decision, rule references, and `must_not_decide`; reducibility checked (9.2) |
+| R2-3 | blocking | Resolver retry could use changed evidence | Fixed: every `blocked(...)` review → `REQUEST_HUMAN_DECISION`; no retry or re-resolution recommendation (6.2 rule 2); S8b expectation changed accordingly |
+| R2-4 | non-blocking | OF-1 overstated | Fixed: OF-1 now describes only the observed invocation (13) |
 
 ## 13. Operational findings (outside Phase A scope)
 
-**OF-1: reviewer model selection when launching a reviewer directly from the OpenCode CLI.**
+**OF-1: observed unpinned reviewer invocation.**
 
-- **Where:** reviewer agents are configured with `"mode": "subagent"` and `"model": "9router/review-openai"` (see [examples/opencode.json.example](../../examples/opencode.json.example)).
-- **Observed on 2026-10-20 during cycle 1 of this SPEC's review:** `opencode run --standalone --agent review-openai` without `--model` ran on the default model `9router/economy`. The CLI header read `review-openai · economy`, and 9Router `usageHistory` row 3629 recorded `deepseek-v4.1-flash`.
-- **With the model pinned:** adding `--model 9router/review-openai` produced `gpt-5.6-sol` rows (OpenAI family).
-- **Effect:** an unpinned manual review silently runs on the wrong family/tier.
-- **Not investigated:** whether orchestrator subagent delegation in `/implement-spec` is affected. Nothing here suggests it is, but it was not tested.
-- **Recommendation:** a separate bounded task, such as documenting the required `--model` pin for manual reviews and/or a doctor check. No runtime change is made by Phase A.
+- **When:** 2026-10-20, during review cycle 1 of this SPEC.
+- **What ran:** `opencode run --standalone --agent review-openai`, invoked manually without `--model`.
+- **Observed result:** that invocation ran on `9router/economy`. The CLI header read `review-openai · economy`, and 9Router `usageHistory` row 3629 recorded `deepseek-v4.1-flash`.
+- **With the model pinned:** re-running with `--model 9router/review-openai` produced `gpt-5.6-sol` rows.
+- **Relevant config:** the reviewer agents are configured with `"mode": "subagent"` and an explicit model (see [examples/opencode.json.example](../../examples/opencode.json.example)).
+- **Evidence limits:** the header text and usage rows are session-local and cannot be reproduced from this commit. The observation does not establish whether other invocations, OpenCode versions, or orchestrator subagent delegation behave the same way; none of these were investigated.
+- **Practice adopted for this SPEC's reviews:** pin the reviewer model and confirm the family from 9Router usage rows rather than from the agent name or header.
 
-**OF-2: background-service hang.** In the same session, `opencode run` against the background service logged only `cli starting` and made no model calls. `--standalone` worked. The cause was not investigated.
+**OF-2: CLI hangs.** Two `opencode run` invocations during these reviews made no model calls before being stopped: one against the background service, and one standalone run of a different installed CLI version. They were not investigated. OpenCode CLI troubleshooting is outside this SPEC's scope.
