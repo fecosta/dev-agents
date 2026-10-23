@@ -151,7 +151,7 @@ Automatic remediation (one attempt):
   7. Resolve the remediation model family from fresh checkpoints only: run, after the helper-resolution block, `"$RR" resolve <rem_start_id> <rem_end_id> <remediation-capability-alias>`. If resolution is blocked, report `REVIEW_BLOCKED_MODEL_RESOLUTION` with the documented reason and stop; do not fall back to the initial implementation family or any assumption.
   8. Launch the resolved opposite-family reviewer in a fresh child session against the final commit (initial implementation + remediation), the original findings cross-referenced by ledger ID, possible regressions, and validation evidence for the remediation and any reused evidence. The re-review must return exactly one verdict. The reviewer must not simply accept the remediation agent's claims; it must independently verify that the remediation resolves each original finding and inspect for regressions.
   9. If the re-review returns `PASS` or `PASS_WITH_NOTES`, update every `REMEDIATED` finding that was confirmed to `VERIFIED`, then to `CLOSED`. If the re-review did not re-examine an original finding, keep its prior status (`OPEN` or `REMEDIATED`) and report it as unresolved. Stop normally.
-  10. If the re-review returns `CHANGES_REQUIRED`, add any new findings with new IDs (`R2-<n>`) and status `OPEN`; preserve original findings that were not confirmed as still unresolved. Stop; do not start a second remediation cycle. Report unresolved findings and recommend a new explicitly user-initiated bounded unit.
+  10. If the re-review returns `CHANGES_REQUIRED`, update any original finding the re-review confirmed as resolved to `VERIFIED`; keep `still open` findings in their prior state and `not re-checked` findings unresolved. Add any new findings with new IDs (`R2-<n>`) and status `OPEN`. Stop; do not start a second remediation cycle. Report unresolved findings and recommend a new explicitly user-initiated bounded unit.
 - If the remediation agent returns without a validated commit, or completion verification fails, stop blocked and request human intervention; no re-review is launched.
 
 Focused independent re-review:
@@ -211,7 +211,7 @@ Orchestration report fields:
 - Recommended next action: <action>;
 - unresolved risks.
 
-When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, and Verdict as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
+When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, and re-review fields as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
 
 Concise final report (terminal block, emitted on every terminal path):
 ```text
@@ -219,10 +219,10 @@ Supervised Execution Report:
 - Unit: <name>
 - Final commit: <sha>
 - Validation status: <passed|partial|failed|...> — <summary>
-- Initial implementation model family: <family>
+- Initial implementation model family: <family> | not_applicable | NOT_REACHED
 - Remediation model family: <family> | not_applicable
-- Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)>
-- Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable>
+- Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)|NOT_REACHED>
+- Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable|NOT_REACHED>
 - Orchestrator verification: <VERIFIED|PARTIALLY_VERIFIED|FAILED>
 - Findings resolved: <id>, ... | none
 - Findings unresolved: <id> — <status>, ... | none

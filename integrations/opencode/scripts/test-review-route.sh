@@ -517,6 +517,8 @@ for f in "$ORCH" "$CMD"; do
   has "U3-24 $n SC-9 no commit no re-review" "$f" "no commit is made and no re-review is launched"
   has "U3-25 $n SC-9 report IDs and reasons" "$f" "finding IDs and reasons"
   has "U3-26 $n fresh opposite-family re-review provenance" "$f" "remediation agent's actual runtime family"
+  has "U3-33 $n FAILED path remediation fields NOT_REACHED" "$f" "Remediation attempt count, and re-review fields as NOT_REACHED"
+  has "U3-34 $n CHANGES_REQUIRED confirms resolved originals" "$f" "confirmed as resolved to \`VERIFIED\`"
 done
 has "U3-27 review template finding IDs" "$ROOT/templates/review-report.md" "R<cycle>-<n>"
 has "U3-28 review template prior findings" "$ROOT/templates/review-report.md" "Prior findings status"
