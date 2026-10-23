@@ -32,6 +32,7 @@ product intent / SPEC / bounded task → scope + risk assessment → capability-
 - `economy`, `standard`, `strong`, and `premium` capability tiers.
 - Control-plane protection: changes to orchestration behavior, routing, review, permissions, Git safety, or agent instructions are treated as at least `standard` and require independent review when they alter execution behavior.
 - Mandatory runtime start/end checkpoints around implementation delegation.
+- Mandatory read-only orchestrator completion verification (`VERIFIED | PARTIALLY_VERIFIED | FAILED`) of the actual diff, commit, and Git state before the review decision.
 - 9Router runtime model-family resolution.
 - Opposite-family independent review when required.
 - `/doctor` read-only diagnostics.
@@ -65,7 +66,7 @@ product intent / SPEC / bounded task → scope + risk assessment → capability-
 - **Independent review when required.** Control-plane changes and other high-risk or complex work are verified by an opposite-family reviewer. This follows [`policies/review-routing.md`](../policies/review-routing.md) and the orchestrator instructions in [`integrations/opencode/agents/orchestrator.md`](../integrations/opencode/agents/orchestrator.md).
 - **Runtime evidence over model-family assumptions.** The actual implementation family is resolved from 9Router runtime usage rather than inferred from capability aliases, combo definitions, or provider assumptions. This is enforced by the resolver contract in [`integrations/opencode/README.md`](../integrations/opencode/README.md).
 - **Git safety is part of the product contract.** Commits happen only after validation passes, use the configured local Git author, add no AI co-author metadata, and never force-push, rewrite shared history, or bypass protections. This follows [`policies/git-safety.md`](../policies/git-safety.md).
-- **Verification over apparent completion.** Implementation is followed by validation and, when required, independent review before handoff. This matches the product model and core workflow in [`AGENTS.md`](../AGENTS.md).
+- **Verification over apparent completion.** Implementation is followed by validation, orchestrator verification of the actual artifacts (not the child's self-report), and, when required, independent review before handoff; unverified work is never reported complete. This matches the product model and core workflow in [`AGENTS.md`](../AGENTS.md).
 
 **Status:** Approved and implemented. Operational details remain authoritative in the linked documents.
 

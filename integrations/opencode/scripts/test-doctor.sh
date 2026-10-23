@@ -72,13 +72,15 @@ mkstubs() { # <dir>: fake opencode first on PATH
   printf '#!/bin/sh\necho "opencode v0.0.0-stub"\n' >"$1/opencode"; chmod +x "$1/opencode"
 }
 
-mkmin() { # <dir> <excluded tool>...  minimal PATH dir of symlinks (plus the fake opencode)
+mkmin() { # <dir> <excluded tool>...  minimal PATH dir of symlinks (plus the fake opencode unless "opencode" is excluded)
   local d="$1" t p x skip
   shift
   rm -rf "$d"; mkdir -p "$d"
-  mkstubs "$d"
+  skip=0
+  for x in "$@"; do [ "$x" = opencode ] && skip=1; done
+  [ "$skip" = 1 ] || mkstubs "$d"
   for t in bash sh env awk sed tr cut cat head grep sort paste dirname basename mktemp rm cmp \
-    shasum sha256sum cksum sleep git jq sqlite3 cp chmod mkdir find uname wc date perl; do
+    shasum sha256sum cksum git jq sqlite3 cp chmod mkdir find uname wc date perl; do
     skip=0
     for x in "$@"; do [ "$x" = "$t" ] && skip=1; done
     [ "$skip" = 1 ] && continue
@@ -138,7 +140,7 @@ for c in exe_sqlite3 exe_opencode installed_orchestrator installed_commands inst
   expect "A5 $c pass" "$c" pass
 done
 eq "A6 checkpoint detail" "$(detail_of checkpoint)" "checkpoint start = 2"
-contains "A7 opencode version stub" "$(detail_of exe_opencode)" "stub"
+eq "A7 opencode presence detail (no version)" "$(detail_of exe_opencode)" "opencode found on PATH"
 eq "A8 sync not skipped" "$(detail_of orchestrator_sync)" "1 file(s) match repository"
 run_doctor "$DOCTOR"
 eq "A9 human exit 0" "$RC" 0
@@ -203,6 +205,15 @@ expect "E4 checkpoint not checked" checkpoint warn
 mkmin "$F/min2"
 PATH_OVERRIDE="$F/min2" run_doctor "$DOCTOR" --machine
 eq "E5 minimal PATH with sqlite3 is healthy" "$RC" 0
+# missing opencode is a FAIL (presence-only check)
+mkmin "$F/min3" opencode
+[ ! -e "$F/min3/opencode" ] && ok "E6a minimal PATH really has no opencode" || bad "E6a minimal PATH really has no opencode"
+PATH_OVERRIDE="$F/min3" run_doctor "$DOCTOR" --machine
+eq "E6b missing opencode exit 2" "$RC" 2
+expect "E6c exe_opencode fail" exe_opencode fail
+contains "E6d detail" "$(detail_of exe_opencode)" "opencode not found on PATH"
+contains "E6e install hint" "$OUT" "hint=install OpenCode"
+eq "E6f exactly one failure" "$(summary_of failed)" 1
 
 # --- F: missing DB ------------------------------------------------------------
 mkfix F; rm "$F/home/.9router/db/data.sqlite"
@@ -603,6 +614,54 @@ smoke_fix s18; mkbody $NC non-claude review-claude "models=$SENTINEL_CFG" +"x=$S
 lacks "Smoke-R18 resolver text never echoed (config sentinel)" "$OUT" "$SENTINEL_CFG"
 lacks "Smoke-R18 resolver text never echoed (db sentinel)" "$OUT" "$SENTINEL_DB"
 
+# --- Race: opencode is never executed; no watchdog, no stray processes -------
+# Regression: a hanging opencode stub must never run (presence-only check). The stub leaves a
+# marker file if executed; the doctor must finish fast with exe_opencode pass and no failures.
+mkfix race_noexec
+printf '#!/bin/sh\ntouch "%s/opencode.ran"\nexec sleep 30\n' "$F" >"$F/stubs/opencode"; chmod +x "$F/stubs/opencode"
+t0=$SECONDS
+run_doctor "$DOCTOR" --machine
+race_elapsed=$((SECONDS - t0))
+eq "Race-1a exit 0" "$RC" 0
+eq "Race-1b overall=pass" "$(summary_of overall)" pass
+expect "Race-1c exe_opencode passes" exe_opencode pass
+eq "Race-1d failed=0" "$(summary_of failed)" 0
+eq "Race-1e warnings=0" "$(summary_of warnings)" 0
+[ ! -e "$F/opencode.ran" ] && ok "Race-1f hanging opencode stub was never executed" || bad "Race-1f hanging opencode stub was never executed"
+[ "$race_elapsed" -le 5 ] && ok "Race-1g finished quickly (${race_elapsed}s)" || bad "Race-1g finished quickly (${race_elapsed}s)"
+eq "Race-1j doctor tempdir cleaned" "$(ls -A "$TMP/tmpd" | wc -l | tr -d ' ')" 0
+
+# Race-2: parallel stress (4 workers x 10 runs): isolated temp dirs, 0 failures, empty per-worker TMPDIRs.
+mkfix race_stress
+race_tmp="$TMP/race_stress"
+mkdir -p "$race_tmp"
+for w in 1 2 3 4; do
+  mkdir -p "$TMP/tmpd_race$w"
+  (
+    for i in $(seq 1 10); do
+      env -i HOME="$F/home" NINEROUTER_DB="$F/home/.9router/db/data.sqlite" PATH="$F/stubs:$REAL_PATH" TMPDIR="$TMP/tmpd_race$w" \
+        "$BASH_BIN" "$DOCTOR" --machine >"$race_tmp/w$w.$i.out" 2>&1 </dev/null
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        printf 'FAIL w=%s i=%s rc=%s\n' "$w" "$i" "$rc" >>"$race_tmp/failures"
+        head -20 "$race_tmp/w$w.$i.out" >>"$race_tmp/failures"
+      fi
+    done
+    leftovers=$(ls -A "$TMP/tmpd_race$w" 2>/dev/null)
+    if [ -n "$leftovers" ]; then
+      printf 'LEFTOVER w=%s: %s\n' "$w" "$leftovers" >>"$race_tmp/failures"
+    fi
+  ) &
+done
+wait
+race_failures=$(cat "$race_tmp/failures" 2>/dev/null | wc -l | tr -d ' ')
+eq "Race-2a no failures in 4x10 parallel stress" "$race_failures" 0
+race_leftover_n=$(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+if [ "$race_leftover_n" -ne 0 ]; then
+  bad "Race-2b leftover doctor temp dirs ($(find "$TMP/tmpd_race1" "$TMP/tmpd_race2" "$TMP/tmpd_race3" "$TMP/tmpd_race4" -mindepth 1 2>/dev/null))"
+else
+  ok "Race-2b no leftover doctor temp dirs"
+fi
 echo
 echo "Result: $pass passed, $failn failed"
 [ "$failn" -eq 0 ]

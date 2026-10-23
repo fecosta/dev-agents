@@ -355,6 +355,111 @@ has J7 "$ORCH" "Verdict: PASS"
 has J8 "$ORCH" "Model resolution reason: MODEL_DETECTION_AMBIGUOUS"
 has J9 "$ORCH" "Independent review: REVIEW_BLOCKED_MODEL_RESOLUTION"
 
+# --- V: orchestrator completion verification checkpoint (static wording)
+for f in "$ORCH" "$CMD"; do
+  n=$(basename "$f")
+  has "V1 $n step exists" "$f" "ompletion verification"
+  has "V2 $n after end checkpoint, before review decision" "$f" "after the end checkpoint and before the review decision"
+  has "V3 $n VERIFIED" "$f" "VERIFIED"
+  has "V4 $n PARTIALLY_VERIFIED" "$f" "PARTIALLY_VERIFIED"
+  has "V5 $n FAILED" "$f" "FAILED"
+  has "V6 $n not verified complete" "$f" "NOT verified complete"
+  has "V7 $n FAILED stops before review decision" "$f" "stop before the review decision"
+  has "V8 $n read-only" "$f" "read-only (no edits"
+  has "V9 $n not independent review" "$f" "not independent review"
+  has "V10 $n git show --stat" "$f" "git show --stat"
+  has "V11 $n report field verification" "$f" "Orchestrator verification"
+  has "V12 $n report field unverified" "$f" "Unverified requirements"
+done
+has V13 "$ORCH" "Order: child returns -> END CHECKPOINT -> completion verification -> review decision"
+has V14 "$ORCH" "never call it complete or successful"
+has V15 "$ORCH" "no reviewer, no automatic remediation, no re-delegation"
+has V16 "$ORCH" "Never accept a \"tests passed\" claim as verified without evidence"
+has V17 "$CMD" "never say complete or successful"
+has V18 "$README" "Completion verification"
+has V19 "$README" "Orchestrator verification"
+hasnot V20 "$ORCH" "Continue to normal completion"
+
+# --- W: relationship/ordering invariants (verification step, FAILED -> NOT_REACHED, PARTIALLY_VERIFIED)
+PORT="$ROOT/commands/implement-spec.md"
+AGENTS="$ROOT/AGENTS.md"
+lnum() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }                   # first line number of a phrase
+stepn() { sed -n "s/^\([0-9][0-9]*\)\. $2.*/\1/p" "$1" | head -1; }         # leading step number of a numbered line
+lineof() { grep -F -- "$2" "$1" | head -1; }                                 # first line containing a phrase
+block() { awk -v h="$2" 'index($0,h)==1{f=1;next} f&&/^```/{c++; if(c==2)exit; next} f&&c==1' "$1"; }  # fenced block after heading
+lt3() { [[ -n "$1" && -n "$2" && -n "$3" && "$1" -lt "$2" && "$2" -lt "$3" ]]; }
+orch_order() { lt3 "$(lnum "$1" "END CHECKPOINT (mandatory)")" "$(lnum "$1" "Completion verification (mandatory")" "$(lnum "$1" "Review decision:")"; }
+cmd_order() { lt3 "$(stepn "$1" "END CHECKPOINT")" "$(stepn "$1" "Completion verification")" "$(stepn "$1" "Decide whether independent review")"; }
+port_order() { lt3 "$(stepn "$1" "Produce an implementation handoff")" "$(stepn "$1" "Verify completion read-only")" "$(stepn "$1" "If review is required")"; }
+contains_all() { local t="$1"; shift; local k; for k in "$@"; do [[ "$t" == *"$k"* ]] || return 1; done; }
+
+# ordering: end checkpoint < verification < review decision
+orch_order "$ORCH" && ok "W1 ORCH order end checkpoint < verification < review decision" || bad "W1 ORCH order"
+cmd_order "$CMD" && ok "W2 CMD order end checkpoint < verification < review decision" || bad "W2 CMD order"
+port_order "$PORT" && ok "W3 portable order handoff < verification < review" || bad "W3 portable order"
+
+# mutation self-check: the ordering assertions must fail when verification moves after the review decision
+sed 's/^12\. Completion verification/14. Completion verification/' "$CMD" > "$TMP/cmd_mut"
+cmd_order "$TMP/cmd_mut" && bad "W4 mutation (CMD verification moved) not detected" || ok "W4 mutation detected (CMD)"
+sed 's/^Completion verification (mandatory/Zompletion verification (mandatory/' "$ORCH" > "$TMP/orch_mut"
+orch_order "$TMP/orch_mut" && bad "W5 mutation (ORCH heading removed) not detected" || ok "W5 mutation detected (ORCH heading removed)"
+# genuine ORCH ordering mutation: move Review decision before END CHECKPOINT
+awk '
+  { lines[NR] = $0 }
+  /^Review decision:/ { rd_line = NR }
+  /END CHECKPOINT \(mandatory\)/ { end_line = NR }
+  END {
+    for (i = 1; i <= NR; i++) {
+      if (i == rd_line) continue
+      if (i == end_line) print "Review decision:"
+      print lines[i]
+    }
+  }
+' "$ORCH" > "$TMP/orch_mut_order"
+if cmp -s "$ORCH" "$TMP/orch_mut_order"; then bad "W5b mutation produced an identical file"; else ok "W5b mutation file differs from original"; fi
+orch_order "$TMP/orch_mut_order" && bad "W5b mutation (ORCH order inverted) not detected" || ok "W5b mutation detected (ORCH order inverted)"
+
+# FAILED -> NOT_REACHED review fields, within each file's FAILED description
+of=$(lineof "$ORCH" "When Orchestrator verification is FAILED, the review decision is never evaluated")
+contains_all "$of" "NOT_REACHED" "Review required" "Review decision reason" "Model resolution" "Reviewer" "Verdict" && ok "W6 ORCH FAILED text -> NOT_REACHED review fields" || bad "W6 ORCH FAILED text"
+cf=$(lineof "$CMD" "Result is exactly one of")
+contains_all "$cf" "FAILED" "NOT_REACHED" "Review required" "Review decision reason" "Model resolution" "Reviewer" "Verdict" "without evaluating review need" && ok "W7 CMD FAILED text -> NOT_REACHED review fields" || bad "W7 CMD FAILED text"
+has W8 "$ORCH" "Start checkpoint and End checkpoint stay reported"
+fb=$(block "$ORCH" "Example, failed")
+contains_all "$fb" "Orchestrator verification: FAILED" "Review required: NOT_REACHED" "Review decision reason: NOT_REACHED" "Model resolution: NOT_REACHED" "Independent review: NOT_REACHED" && ok "W10 ORCH FAILED example NOT_REACHED fields" || bad "W10 ORCH FAILED example"
+if printf '%s\n' "$fb" | grep -qiE 'complete|successful'; then bad "W11 FAILED example claims complete/successful"; else ok "W11 FAILED example has no complete/successful claim"; fi
+if printf '%s\n' "$fb" | grep -qE '^(Reviewer|Verdict): *(PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|review-)'; then bad "W12 FAILED example has real Reviewer/Verdict"; else ok "W12 FAILED example has no real Reviewer/Verdict"; fi
+if printf '%s\n' "$fb" | grep -qE '^(Reviewer|Verdict):'; then bad "W13 FAILED example has Reviewer/Verdict lines"; else ok "W13 FAILED example has no Reviewer/Verdict lines"; fi
+
+# PARTIALLY_VERIFIED: only VERIFIED may be complete/successful, on every terminal path
+r=$(lineof "$ORCH" "Final report, on every terminal path")
+contains_all "$r" "review not required" "REVIEW_BLOCKED_MODEL_RESOLUTION" "PASS" "only when Orchestrator verification is VERIFIED" "never upgrades PARTIALLY_VERIFIED" "never upgrades verification status" "never complete" && ok "W14 ORCH terminal-path rule" || bad "W14 ORCH terminal-path rule"
+r=$(lineof "$CMD" "On every terminal path")
+contains_all "$r" "review not required" "REVIEW_BLOCKED_MODEL_RESOLUTION" "PASS" "only when Orchestrator verification is VERIFIED" "never upgrades PARTIALLY_VERIFIED" "never upgrades verification status" "never complete" && ok "W15 CMD terminal-path rule" || bad "W15 CMD terminal-path rule"
+r=$(lineof "$PORT" "Only \`VERIFIED\` may be called complete")
+contains_all "$r" "review not required" "review blocked" "PASS" "never upgrades verification status" && ok "W16 portable terminal-path rule" || bad "W16 portable terminal-path rule"
+pb=$(block "$ORCH" "Example, partially verified")
+contains_all "$pb" "PARTIALLY_VERIFIED" "NOT verified complete" && ok "W17 PARTIALLY_VERIFIED example says NOT verified complete" || bad "W17 PARTIALLY_VERIFIED example"
+if printf '%s\n' "$pb" | grep -q 'Verdict: PASS'; then bad "W18 PARTIALLY_VERIFIED example pairs with PASS"; else ok "W18 PARTIALLY_VERIFIED example has no PASS verdict"; fi
+# no example block pairs PARTIALLY_VERIFIED with complete/successful outside "NOT verified complete"
+w19=ok
+while IFS= read -r h; do
+  b=$(block "$ORCH" "$h")
+  if [[ "$b" == *PARTIALLY_VERIFIED* ]] && printf '%s\n' "$b" | sed 's/NOT verified complete//g' | grep -qiE 'complete|successful'; then w19="bad"; fi
+done < <(grep '^Example,' "$ORCH")
+[[ $w19 == ok ]] && ok "W19 no example pairs PARTIALLY_VERIFIED with complete/successful" || bad "W19 example pairs PARTIALLY_VERIFIED with complete/successful"
+
+# portable workflow: verification step content
+ps=$(lineof "$PORT" "Verify completion read-only")
+contains_all "$ps" "validation" "unverified" "scope and acceptance" "not independent review" "NOT verified complete" "NOT_REACHED" "VERIFIED" "PARTIALLY_VERIFIED" "FAILED" "never accept \"tests passed\" without evidence" "re-run cheap read-only validation" "commit SHA" "git status" && ok "W20 portable verification step content" || bad "W20 portable verification step content"
+has W21 "$PORT" "report every unverified requirement"
+
+# cross-file consistency: statuses and NOT_REACHED everywhere
+for f in "$AGENTS" "$ORCH" "$CMD" "$PORT" "$README"; do
+  n=$(basename "$(dirname "$f")")/$(basename "$f")
+  for k in VERIFIED PARTIALLY_VERIFIED FAILED NOT_REACHED; do has "W22 $n: $k" "$f" "$k"; done
+done
+
 # --- README wording corrected
 hasnot R1 "$README" "keeps later orchestrator traffic out of the window"
 hasnot R2 "$README" "Traffic after \`end-id\` (including the orchestrator's own) is excluded"
