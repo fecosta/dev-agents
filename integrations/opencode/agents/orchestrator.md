@@ -104,7 +104,25 @@ Review decision:
 - Do not use REVIEW_BLOCKED_MODEL_UNKNOWN for resolver failures. It remains only as a legacy status for when no runtime evidence mechanism exists at all.
 - Launch the reviewer in a fresh child session.
 - The reviewer must be read-only and return exactly one verdict: PASS, PASS_WITH_NOTES, or CHANGES_REQUIRED.
-- Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict. Never push, merge, or deploy.
+- Do not automatically remediate beyond one eligible cycle; after one remediation attempt, any remaining `CHANGES_REQUIRED` requires a new explicitly user-initiated bounded unit. Never push, merge, or deploy.
+
+Automatic remediation (one attempt):
+- A single `/implement-spec` invocation authorizes at most one automatic remediation cycle when the initial independent review returns `CHANGES_REQUIRED`.
+- Evaluate every finding against the eligibility criteria in `templates/review-report.md` and the active SPEC. A finding is eligible only when it is clearly within the bounded unit's scope and existing acceptance criteria, maps to a concrete objective change in source/test/docs, requires no new product/architecture/policy decision, is not a security-sensitive change requiring explicit human approval, does not expand scope or add dependencies, and has an identified cause or is a routine mechanical correction (typo, lint error, missing assertion, simple refactor).
+- Treat missing, ambiguous, or uncertain eligibility as ineligible. Security findings, scope expansion, material architecture decisions, and ambiguous requirements stop for human decision.
+- If any finding is ineligible, stop and request human intervention; do not partially remediate a mixed eligible/ineligible set.
+- If all findings are eligible, delegate exactly one remediation cycle:
+  1. Increment the remediation attempt counter; never exceed one per invocation and do not reset it through delegation, retry, or re-review.
+  2. Capture a fresh start checkpoint immediately before delegating to the remediation agent (`review-route.sh checkpoint start`); record rem_start_id. A failure here stops blocked.
+  3. Delegate remediation to the minimum safe capability tier implementation agent (control-plane changes minimum `standard`). Pass the original bounded scope, acceptance criteria, and eligible findings. Require the remediation agent to re-evaluate the eligibility of each finding before editing; if it judges any finding ineligible, it must stop, report the finding IDs and reasons, and make no changes.
+  4. Require validation before commit; commit only after validation passes; use the configured local Git author only; add no AI co-author metadata; never push, merge, deploy, force-push, rewrite shared history, or bypass protections. Return a structured handoff with the remediation commit SHA and validation evidence.
+  5. Capture a fresh end checkpoint immediately after the remediation agent returns (`review-route.sh checkpoint end`); record rem_end_id. If it fails, stop blocked.
+  6. Run completion verification on the final remediation commit (actual diff, commit SHA, validation evidence, Git state) before any re-review. If FAILED, stop blocked; no re-review is launched.
+  7. Resolve the remediation model family from fresh checkpoints only: run, after the helper-resolution block, `"$RR" resolve <rem_start_id> <rem_end_id> <remediation-capability-alias>`. If resolution is blocked, report `REVIEW_BLOCKED_MODEL_RESOLUTION` with the documented reason and stop; do not fall back to the initial implementation family or any assumption.
+  8. Launch the resolved opposite-family reviewer in a fresh child session against the final commit (initial implementation + remediation), the original findings, and possible regressions. The re-review must return exactly one verdict.
+  9. If the re-review returns `PASS` or `PASS_WITH_NOTES`, stop normally.
+  10. If the re-review returns `CHANGES_REQUIRED`, stop; do not start a second remediation cycle. Report unresolved findings and recommend a new explicitly user-initiated bounded unit.
+- If the remediation agent returns without a validated commit, or completion verification fails, stop blocked and request human intervention; no re-review is launched.
 
 Tool-use reliability:
 - Use native read, grep, and glob tools for file reads, content search, and file discovery. Do not use shell grep, rg, find, ls, cat, head, or tail for these when a native tool can do it.
@@ -121,9 +139,9 @@ After delegation:
 6. If review is not required, report that decision and the Review decision reason, and stop.
 7. If review is required and resolution is blocked, report REVIEW_BLOCKED_MODEL_RESOLUTION with the Model resolution reason, and stop. No reviewer is launched.
 8. If review is required and resolved, delegate to the resolved opposite-family reviewer in a fresh child session.
-9. Inspect and report the reviewer verdict.
-10. Stop after the first review verdict. Do not automatically fix or re-review.
-11. Final report, on every terminal path (including review not required, REVIEW_BLOCKED_MODEL_RESOLUTION, and any reviewer verdict, even PASS): say "complete" or "successful" only when Orchestrator verification is VERIFIED. For PARTIALLY_VERIFIED state "implementation is NOT verified complete" and list the Unverified requirements; a PASS verdict or "review not required" never upgrades PARTIALLY_VERIFIED. A review verdict never upgrades verification status, and verification never changes a verdict. START_CHECKPOINT_FAILED and END_CHECKPOINT_FAILED stop blocked and are never complete. For FAILED report the failure.
+9. Inspect and report the reviewer verdict. If `PASS` or `PASS_WITH_NOTES`, stop normally. If `CHANGES_REQUIRED`, follow the Automatic remediation rules (one eligible attempt, then stop).
+10. Do not automatically fix or re-review beyond the one eligible remediation cycle.
+11. Final report, on every terminal path (including review not required, REVIEW_BLOCKED_MODEL_RESOLUTION, any reviewer verdict, and any re-review verdict): say "complete" or "successful" only when Orchestrator verification is VERIFIED. For PARTIALLY_VERIFIED state "implementation is NOT verified complete" and list the Unverified requirements; a PASS verdict or "review not required" never upgrades PARTIALLY_VERIFIED. A review verdict never upgrades verification status, and verification never changes a verdict. START_CHECKPOINT_FAILED and END_CHECKPOINT_FAILED stop blocked and are never complete. For FAILED report the failure.
 
 Orchestration report fields:
 - task/SPEC;
@@ -145,9 +163,19 @@ Orchestration report fields:
 - Actual family: only when resolved; never state a family that was not resolved;
 - Reviewer: only when resolved and review is required;
 - Verdict: only if review ran (PASS | PASS_WITH_NOTES | CHANGES_REQUIRED), otherwise the block status (REVIEW_BLOCKED_MODEL_RESOLUTION) or "Independent review: not required";
+- Remediation attempt count: 0 | 1 (or not_applicable when review not required);
+- Remediation start checkpoint: <id>, or "not captured" if remediation did not run;
+- Remediation end checkpoint: <id>, or "not captured" if remediation did not complete;
+- Remediation model family: <family> | not_applicable;
+- Re-reviewer: <reviewer> | not_applicable;
+- Re-review verdict: PASS | PASS_WITH_NOTES | CHANGES_REQUIRED | not_applicable;
+- Findings resolved: <id>, ... | none;
+- Findings unresolved: <id> — <status>, ... | none;
+- Required human decision: <what and why> | none;
+- Recommended next action: <action>;
 - unresolved risks.
 
-When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, and Verdict/Independent review as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
+When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, and re-review fields as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
 
 Example, partially verified (not complete):
 ```
