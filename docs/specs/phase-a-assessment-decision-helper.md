@@ -39,10 +39,10 @@ Non-goals:
 
 | Area | What exists today | Source |
 | --- | --- | --- |
-| Authority and workflow | Authority order; 12-step core workflow ending at the phase/SPEC boundary. Step 11 describes a fix → validate → commit → re-review loop | [AGENTS.md](../../AGENTS.md) |
+| Authority and workflow | Authority order; core workflow ending at the phase/SPEC boundary, including a "Fix material findings, validate, commit, and re-review" remediation loop | [AGENTS.md](../../AGENTS.md) |
 | Routing | `economy` / `standard` / `strong` / `premium`; control-plane minimum `standard` | [policies/model-routing.md](../../policies/model-routing.md), [commands/route-task.md](../../commands/route-task.md) |
 | Bounded units | Vertical slices, one unit per `/implement-spec`, no automatic continuation | [commands/split-spec.md](../../commands/split-spec.md) |
-| Implementation flow (portable) | Step 14: "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | [commands/implement-spec.md](../../commands/implement-spec.md) |
+| Implementation flow (portable) | "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | [commands/implement-spec.md](../../commands/implement-spec.md) |
 | Implementation flow (OpenCode) | Start/end checkpoints (mandatory), delegation, review decision, runtime family resolution, fail-closed reasons, report fields; "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict." | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md), [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) |
 | Runtime provenance | `review-route.sh` checkpoint/resolve; `resolve-model-family.sh` key=value contract with documented block reasons. Resolution reads the *current* `usageHistory` rows and `combos` definition | [integrations/opencode/README.md](../../integrations/opencode/README.md), [resolve-model-family.sh](../../integrations/opencode/scripts/resolve-model-family.sh), [review-route.sh](../../integrations/opencode/scripts/review-route.sh) |
 | Review | Opposite-family reviewer; verdicts `PASS` / `PASS_WITH_NOTES` / `CHANGES_REQUIRED`; blocking / non-blocking findings | [policies/review-routing.md](../../policies/review-routing.md), [templates/review-report.md](../../templates/review-report.md), [commands/review-change.md](../../commands/review-change.md) |
@@ -386,7 +386,7 @@ Decision Helper (advisory only — nothing has been executed):
 - Each next action requires a new explicit user command, for example `/implement-spec` for remediation or `/review-change` for re-review.
 - It never initiates implementation, push, merge, deployment, history rewrite, or production changes. These may appear only as steps the user performs, with the required explicit authorization named.
 - It runs after the OpenCode orchestrator's "stop after the first review verdict" point and also stops.
-- Its output is not authorization for the portable remediation loop still described in [commands/implement-spec.md](../../commands/implement-spec.md) step 14 and [AGENTS.md](../../AGENTS.md) step 11 until U4 lands D7 (7.1).
+- Its output is not authorization for the portable remediation loop still described in [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, route fixes...) and [AGENTS.md](../../AGENTS.md) (Fix material findings...) until U4 lands D7 (7.1).
 
 ## 7. Integration architecture (minimal)
 
@@ -396,7 +396,7 @@ Decision Helper (advisory only — nothing has been executed):
 | Portable procedure for assessment + Decision Helper | `commands/assess-change.md` (new) | control-plane |
 | OpenCode `/assess` command: `agent: orchestrator`, `subagent: false`; text forbids delegation, edits, validation runs, re-resolution, and Git writes; emits the 5.2 and 6.3 blocks | `integrations/opencode/commands/assess.md` (new) | control-plane |
 | Final report appends the Assessment and Decision Helper blocks (also for blocked outcomes); OpenCode "stop" wording unchanged | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md) step 18, [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) "Orchestration report fields" | control-plane |
-| Portable stop-after-verdict semantics (D7, 7.1) | [commands/implement-spec.md](../../commands/implement-spec.md) step 14, [AGENTS.md](../../AGENTS.md) step 11 | control-plane |
+| Portable stop-after-verdict semantics (D7, 7.1) | [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, route fixes...), [AGENTS.md](../../AGENTS.md) (Fix material findings...) | control-plane |
 | Manifest +`commands/assess.md`; `NMAN` 14→15 plus an assess block modeled on the handoff block; README install list 14→15 | [sync-install.sh](../../integrations/opencode/scripts/sync-install.sh), [test-sync-install.sh](../../integrations/opencode/scripts/test-sync-install.sh), [integrations/opencode/README.md](../../integrations/opencode/README.md) | control-plane |
 | Annotation conventions, two new lines, model/family wording (section 4) | [templates/implementation-handoff.md](../../templates/implementation-handoff.md), [templates/review-report.md](../../templates/review-report.md) | contract |
 | One workflow step: "Assess verification state and record an advisory next-action recommendation; do not execute it." | [AGENTS.md](../../AGENTS.md), [README.md](../../README.md) | control-plane |
@@ -419,8 +419,8 @@ Portability: the contract and procedure live in `policies/` and `commands/` and 
 
 The portable contract and the OpenCode adapter currently disagree:
 
-- Portable [commands/implement-spec.md](../../commands/implement-spec.md) step 14 says "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review".
-- [AGENTS.md](../../AGENTS.md) core workflow step 11 says "Fix material findings, validate, commit, and re-review".
+- Portable [commands/implement-spec.md](../../commands/implement-spec.md) says "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review".
+- [AGENTS.md](../../AGENTS.md) core workflow says "Fix material findings, validate, commit, and re-review".
 - The OpenCode orchestrator says "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict."
 
 **Decision D7 (approved):** the portable `/implement-spec` contract adopts stop-after-verdict semantics. `CHANGES_REQUIRED` must not trigger automatic remediation. Fixes and re-review run only as a new, explicitly user-initiated bounded unit, typically after a `REMEDIATE_FINDINGS` recommendation.
@@ -468,7 +468,7 @@ This change is assigned to U4 and is **not made by this SPEC change**; the opera
 - AC-I.2 `test-doctor.sh`, `test-review-route.sh`, and `test-resolve-model-family.sh` pass unchanged.
 - AC-I.3 OpenCode `/implement-spec` step 19 and the orchestrator "stop after the first verdict" wording are unchanged.
 - AC-I.4 Checkpoint and resolution wording is unchanged.
-- AC-I.5 Portable `commands/implement-spec.md` step 14 and `AGENTS.md` step 11 no longer describe automatic remediation or re-review (D7, U4).
+- AC-I.5 Portable `commands/implement-spec.md` and `AGENTS.md` no longer describe automatic remediation or re-review (D7, U4).
 
 **A5 — Regression scenarios**
 

@@ -28,6 +28,9 @@
 # <root>/integrations/opencode/agents/orchestrator.md exist). Otherwise they report
 # status=pass detail="skipped (not a dev-agents checkout)".
 #
+# Executables: sqlite3 and git are run only for their --version; opencode is checked by PATH
+# presence only and is never executed.
+#
 # Env: HOME (config dir is $HOME/.config/opencode), NINEROUTER_DB (default
 # $HOME/.9router/db/data.sqlite). Needs bash 3.2+; sqlite3, jq (optional), shasum/sha256sum/cksum.
 
@@ -96,20 +99,6 @@ check() {
 
 notchecked() { check "$1" warn "not checked: $2"; } # <name> <reason>
 
-# Run a command with a time limit: timed <secs> <outfile> cmd...
-timed() {
-  local secs="$1" out="$2" pid wd rc
-  shift 2
-  "$@" >"$out" 2>&1 </dev/null &
-  pid=$!
-  ( sleep "$secs"; kill "$pid" ) >/dev/null 2>&1 &
-  wd=$!
-  wait "$pid" 2>/dev/null; rc=$?
-  kill "$wd" >/dev/null 2>&1
-  wait "$wd" >/dev/null 2>&1
-  return "$rc"
-} 2>/dev/null
-
 fsum() { # portable deterministic checksum of one file
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 <"$1" | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum <"$1" | awk '{print $1}'
@@ -148,13 +137,9 @@ else
   check exe_git warn "git not found on PATH (delegated implementation agents need it to commit)" "install git with your package manager"
 fi
 
+# Presence only: opencode is never executed (a hanging or broken binary cannot stall the doctor).
 if command -v opencode >/dev/null 2>&1; then
-  if timed 10 "$TMP/oc.ver" opencode --version; then
-    v=$(head -n 1 "$TMP/oc.ver")
-    check exe_opencode pass "${v:-version unknown}"
-  else
-    check exe_opencode warn "opencode found but --version failed or timed out"
-  fi
+  check exe_opencode pass "opencode found on PATH"
 else
   check exe_opencode fail "opencode not found on PATH" "install OpenCode (https://opencode.ai/v2/docs/)"
 fi

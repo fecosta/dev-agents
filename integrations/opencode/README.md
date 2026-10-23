@@ -85,9 +85,10 @@ Helper: `review-route.sh` (bash 3.2+, `sqlite3` only), located by the helper-res
 1. **Start checkpoint** immediately before delegating: `review-route.sh checkpoint start` runs the read-only query below and validates one integer (`^[0-9]{1,15}$`).
 2. **Delegate** to the already-selected agent. The capability alias stays in orchestration state and becomes the resolver `<combo-name>`.
 3. **End checkpoint** immediately after the child returns, before the review decision.
-4. **Review decision** from the handoff (control-plane changes always need review). If review is not required, resolution is skipped and no family is reported.
-5. **Resolve** (review required only): `review-route.sh resolve <start> <end> <alias>` runs `resolve-model-family.sh`, strictly validates the key=value output, and checks family and reviewer agree (`claude` -> `review-openai`, `non-claude` -> `review-claude`).
-6. **Route** to that reviewer in a fresh read-only child session (one verdict: `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`; no automatic fix; no push/merge/deploy), or **fail closed** with `REVIEW_BLOCKED_MODEL_RESOLUTION`.
+4. **Completion verification** (read-only, not a review; every delegated implementation): the orchestrator inspects the actual diff, commit, changed files, validation evidence, and Git state against scope and acceptance criteria, not only the handoff. Result `VERIFIED`, `PARTIALLY_VERIFIED` (not verified complete; unverified requirements listed; continues to the review decision), or `FAILED` (report and stop before the review decision; no reviewer, no remediation; review fields reported `NOT_REACHED`).
+5. **Review decision** from the handoff and verification (control-plane changes always need review). If review is not required, resolution is skipped and no family is reported.
+6. **Resolve** (review required only): `review-route.sh resolve <start> <end> <alias>` runs `resolve-model-family.sh`, strictly validates the key=value output, and checks family and reviewer agree (`claude` -> `review-openai`, `non-claude` -> `review-claude`).
+7. **Route** to that reviewer in a fresh read-only child session (one verdict: `PASS`, `PASS_WITH_NOTES`, `CHANGES_REQUIRED`; no automatic fix; no push/merge/deploy), or **fail closed** with `REVIEW_BLOCKED_MODEL_RESOLUTION`.
 
 The only SQL the integration runs:
 
@@ -125,7 +126,7 @@ Order: (1) the installed `~/.config/opencode/scripts/review-route.sh`, if execut
 | End checkpoint fails (any review decision) | `REVIEW_BLOCKED_MODEL_RESOLUTION`, reason `END_CHECKPOINT_FAILED`; no reviewer; never continues to completion |
 | Start checkpoint fails (any task) | No delegation; `Review/runtime setup: blocked`, reason `START_CHECKPOINT_FAILED` |
 
-Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Review/runtime setup` (only when blocked before delegation), `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
+Review stays required for every blocked outcome. `REVIEW_BLOCKED_MODEL_UNKNOWN` is a legacy v3a status for when no runtime evidence mechanism exists; resolver failures never use it. The report adds `Orchestrator verification` (`VERIFIED | PARTIALLY_VERIFIED | FAILED`) and `Unverified requirements`, before `Review required`; "complete" or "successful" is used only for `VERIFIED`, on every terminal path (review not required, blocked, or any verdict including `PASS`); a review verdict never upgrades verification status. When verification is `FAILED`, `Review required`, `Review decision reason`, `Model resolution`, and the review-dependent fields are `NOT_REACHED`. It also adds `Review/runtime setup` (only when blocked before delegation), `Start checkpoint`, `End checkpoint`, `Model resolution` (resolved|blocked|skipped), `Model resolution reason` (when blocked), `Actual models and providers`, `Actual family`, `Reviewer`, and `Verdict`/block status.
 
 **Limitations (accepted, no heuristic fallback):**
 
@@ -152,7 +153,7 @@ Checks (names are stable):
 
 | Group | Checks |
 | --- | --- |
-| Executables | `exe_bash`, `exe_sqlite3` (missing = FAIL), `exe_git` (missing = WARN), `exe_opencode` (missing = FAIL); versions are reported |
+| Executables | `exe_bash`, `exe_sqlite3` (missing = FAIL), `exe_git` (missing = WARN), `exe_opencode` (missing = FAIL); `sqlite3` and `git` versions are reported. OpenCode availability is checked by `PATH` presence only: `opencode` is never executed and no OpenCode version is reported |
 | Installed files (`~/.config/opencode`) | `installed_orchestrator`, `installed_commands` (implement-spec, route-task, review-change, split-spec), `installed_scripts` (review-route.sh, resolve-model-family.sh; must be executable); all FAIL if absent. `installed_doctor` (doctor command, agent, script): missing = WARN |
 | Stale installs | `orchestrator_sync`, `command_sync` (every repo `commands/*.md`), `review_route_sync`, `resolver_sync`, `doctor_sync`: SHA-256 (`cksum` fallback) of the installed copy vs the repository; difference or missing = WARN `installed copy differs from repository` |
 | OpenCode config | `config_file` (`opencode.json` exists and is valid JSON; missing/invalid = FAIL; no `jq` = WARN, agent checks then `not checked`), `config_impl_agents` (economy/standard/strong/premium: mode `all`, model `9router/*`), `config_review_agents` (review-openai/review-claude: mode `subagent`, model `9router/*`), `config_explorer` (mode `subagent`; WARN if not). Both the `agent` and `agents` keys are read. Upstream model names behind the 9Router aliases are not checked |
@@ -160,6 +161,8 @@ Checks (names are stable):
 | Helpers | `checkpoint` (installed `review-route.sh checkpoint start`: exit 0, exactly one `^[0-9]{1,15}$` line, empty stderr), `resolver_syntax` (`bash -n`), `resolver_smoke_non_claude` / `resolver_smoke_claude` (installed resolver on a temporary fixture DB must yield `family=non-claude reviewer=review-claude` and `family=claude reviewer=review-openai`), `framing_valid` / `framing_malformed` / `framing_trailing_blank` (installed `review-route.sh resolve` run against stub resolvers via its `DEV_AGENTS_RESOLVER` override: valid output accepted, malformed or blank-line-framed output rejected with `RESOLVER_OUTPUT_INVALID`) |
 
 Sync checks run only when `doctor.sh` is executed from a dev-agents checkout (its own location is `<root>/integrations/opencode/scripts` and `<root>/integrations/opencode/agents/orchestrator.md` exists). Elsewhere (for example the installed copy) they report `status=pass detail=skipped (not a dev-agents checkout)` and do not affect the exit code. To check for stale installs, run `integrations/opencode/scripts/doctor.sh` from the checkout.
+
+**Contract change:** earlier doctor versions ran `opencode --version` under a custom timeout and reported its version (WARN on failure or timeout). That timeout/watchdog is removed; `exe_opencode` is now `pass` (`opencode found on PATH`) or `fail` (not on `PATH`). Check names, exit codes and output format are unchanged.
 
 **Strictly read-only:** the doctor never installs, copies, repairs or edits anything and never changes Git, OpenCode config or 9Router. It reads files, opens the DB with `sqlite3 -readonly` + `PRAGMA query_only=1` (only `sqlite_master`/`table_info` metadata plus the checkpoint `MAX(id)`), and does fixture tests in a `mktemp` directory removed on exit. It never selects credential-bearing columns and never prints config values, so no secrets appear in output. It never calls an LLM.
 
@@ -262,5 +265,6 @@ Expected flow:
 4. child edits only the bounded target;
 5. child validates and commits;
 6. child returns a handoff; orchestrator captures the end checkpoint (a failure here also stops, blocked);
-7. a docs-only sentence change is typically not review-worthy, so the orchestrator reports `Model resolution: skipped (independent review not required)` and stops;
-8. no push, merge, or deploy.
+7. the orchestrator verifies completion read-only (reads the diff, commit, and changed file; reports `Orchestrator verification: VERIFIED` or lists unverified requirements);
+8. a docs-only sentence change is typically not review-worthy, so the orchestrator reports `Model resolution: skipped (independent review not required)` and stops;
+9. no push, merge, or deploy.
