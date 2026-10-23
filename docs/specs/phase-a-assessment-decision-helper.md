@@ -425,9 +425,11 @@ The portable contract and the OpenCode adapter currently disagree:
 
 **Decision D7 (approved):** the portable `/implement-spec` contract adopts stop-after-verdict semantics. `CHANGES_REQUIRED` must not trigger automatic remediation. Fixes and re-review run only as a new, explicitly user-initiated bounded unit, typically after a `REMEDIATE_FINDINGS` recommendation.
 
-Proposed wording for both portable files: "If `CHANGES_REQUIRED`, stop and report; fixes and re-review run only as a new explicit user-initiated unit."
+> **Amendment note (Supervised Execution v1).** If [`docs/specs/supervised-execution-v1.md`](./supervised-execution-v1.md) lands first, D7 is amended to allow one bounded automatic remediation cycle per `/implement-spec` when all findings are eligible. In that case, Supervised Execution U1 owns the wording change to this decision and the edits to `AGENTS.md` and `commands/implement-spec.md`; Supervised Execution U2 owns the OpenCode `/implement-spec` and orchestrator changes. Phase A U4 then verifies Decision Helper consistency with the amended contracts and updates only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does not re-edit the portable or OpenCode `/implement-spec` contracts.
 
-This change is assigned to U4 and is **not made by this SPEC change**; the operational command files are untouched here. Until U4 lands, 6.4 states that the Decision Helper's output does not trigger the portable loop.
+Proposed wording for both portable files if Supervised Execution v1 does not land: "If `CHANGES_REQUIRED`, stop and report; fixes and re-review run only as a new explicit user-initiated unit."
+
+This change is assigned to U4 and is **not made by this SPEC change**; the operational command files are untouched here, unless amended by Supervised Execution v1 as described above. Until U4 lands, 6.4 states that the Decision Helper's output does not trigger the portable loop.
 
 ## 8. Acceptance criteria
 
