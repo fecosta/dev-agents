@@ -19,7 +19,7 @@
 9. Produce an implementation handoff.
 10. Verify completion read-only against the actual diff, commit, and Git state before the review decision (`VERIFIED`, `PARTIALLY_VERIFIED`, or `FAILED`); never report complete unless `VERIFIED` (`FAILED` stops before the review decision; review fields `NOT_REACHED`).
 11. Choose a fresh opposite-family reviewer based on the actual implementation model family.
-12. Fix material findings, validate, commit, and re-review.
+12. If review returns `CHANGES_REQUIRED`, attempt at most one bounded automatic remediation cycle: verify every finding is eligible; delegate the remediation to the minimum safe tier; capture fresh start/end checkpoints; resolve the remediation model family from those checkpoints; validate before commit; verify completion of the remediation commit before any re-review; and run a fresh opposite-family re-review. If the remediation returns without a validated commit, or completion verification fails, stop blocked. If any finding is ineligible, stop and request human intervention. After one remediation attempt, any remaining `CHANGES_REQUIRED` stops and requires a new explicitly user-initiated bounded unit.
 13. Stop at the agreed phase or SPEC boundary.
 
 ## Git rules

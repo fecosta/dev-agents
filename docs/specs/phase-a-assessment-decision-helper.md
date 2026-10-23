@@ -61,7 +61,7 @@ No SPEC convention existed before this document; earlier SPECs were task prompts
 | Partial verification and missing evidence | "Not run" wording in `/handoff`; fail-closed resolver reasons | No uniform representation of absent evidence | A1: every input whose evidence can be absent has an explicit absent-evidence value; fail closed |
 | Observed vs asserted evidence | Orchestrator does not trust child self-reported family | No general labeling for other evidence | A1 evidence labels |
 | Finding identity across review cycles | Free-text findings per report | Cycle-2 findings can be confused with cycle-1 findings | A2 finding IDs `R<cycle>-<n>` |
-| Interpreting results into a next action | OpenCode orchestrator stops; human interprets. Portable command loops into remediation | No structured recommendation; portable/OpenCode stop semantics differ | A3 assessment + A4 Decision Helper; D7 (approved, scheduled in U4) |
+| Interpreting results into a next action | OpenCode orchestrator stops after the first verdict. Portable `/implement-spec` allows at most one bounded automatic remediation cycle when all findings are eligible (D7 amended by Supervised Execution U1) | No structured recommendation; portable/OpenCode stop semantics still differ until Supervised Execution U2 updates the OpenCode contract | A3 assessment + A4 Decision Helper; D7 amended by Supervised Execution U1, verified by Phase A U4 |
 | Re-assessment after out-of-band evidence (e.g. a production check) | None | No entry point | `/assess` command |
 | Handoff model/family fields | Template has "Actual implementation model/family", but the child returns its handoff before resolution runs, and the orchestrator forbids child self-report | Ambiguous ownership | A2: child writes `pending`; orchestrator report is authoritative (4.3) |
 
@@ -386,7 +386,7 @@ Decision Helper (advisory only — nothing has been executed):
 - Each next action requires a new explicit user command, for example `/implement-spec` for remediation or `/review-change` for re-review.
 - It never initiates implementation, push, merge, deployment, history rewrite, or production changes. These may appear only as steps the user performs, with the required explicit authorization named.
 - It runs after the OpenCode orchestrator's "stop after the first review verdict" point and also stops.
-- Its output is not authorization for the portable remediation loop still described in [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, route fixes...) and [AGENTS.md](../../AGENTS.md) (Fix material findings...) until U4 lands D7 (7.1).
+- Its output is never authorization for any remediation loop. Supervised Execution U1 amended the portable contracts in [AGENTS.md](../../AGENTS.md) and [commands/implement-spec.md](../../commands/implement-spec.md) to allow at most one bounded automatic remediation cycle per `/implement-spec`; the Decision Helper remains advisory-only and a `REMEDIATE_FINDINGS` recommendation still requires a new explicit user command.
 
 ## 7. Integration architecture (minimal)
 
@@ -396,7 +396,7 @@ Decision Helper (advisory only — nothing has been executed):
 | Portable procedure for assessment + Decision Helper | `commands/assess-change.md` (new) | control-plane |
 | OpenCode `/assess` command: `agent: orchestrator`, `subagent: false`; text forbids delegation, edits, validation runs, re-resolution, and Git writes; emits the 5.2 and 6.3 blocks | `integrations/opencode/commands/assess.md` (new) | control-plane |
 | Final report appends the Assessment and Decision Helper blocks (also for blocked outcomes); OpenCode "stop" wording unchanged | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md) step 18, [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) "Orchestration report fields" | control-plane |
-| Portable stop-after-verdict semantics (D7, 7.1) | [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, route fixes...), [AGENTS.md](../../AGENTS.md) (Fix material findings...) | control-plane |
+| Portable one-remediation semantics (D7, 7.1; amended by Supervised Execution U1) | [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, one bounded automatic remediation cycle...), [AGENTS.md](../../AGENTS.md) (one bounded automatic remediation cycle) | control-plane |
 | Manifest +`commands/assess.md`; `NMAN` 14→15 plus an assess block modeled on the handoff block; README install list 14→15 | [sync-install.sh](../../integrations/opencode/scripts/sync-install.sh), [test-sync-install.sh](../../integrations/opencode/scripts/test-sync-install.sh), [integrations/opencode/README.md](../../integrations/opencode/README.md) | control-plane |
 | Annotation conventions, two new lines, model/family wording (section 4) | [templates/implementation-handoff.md](../../templates/implementation-handoff.md), [templates/review-report.md](../../templates/review-report.md) | contract |
 | One workflow step: "Assess verification state and record an advisory next-action recommendation; do not execute it." | [AGENTS.md](../../AGENTS.md), [README.md](../../README.md) | control-plane |
@@ -415,21 +415,15 @@ Unchanged:
 
 Portability: the contract and procedure live in `policies/` and `commands/` and do not depend on OpenCode. The OpenCode command is a thin adapter, consistent with the existing split.
 
-### 7.1 Portable stop-after-verdict semantics (D7: approved, implemented in U4)
+### 7.1 Portable one-remediation semantics (D7: amended by Supervised Execution U1; verified by Phase A U4)
 
-The portable contract and the OpenCode adapter currently disagree:
+The portable contract and the OpenCode adapter previously disagreed: the portable files described an open-ended remediation loop, while the OpenCode orchestrator stopped after the first verdict.
 
-- Portable [commands/implement-spec.md](../../commands/implement-spec.md) says "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review".
-- [AGENTS.md](../../AGENTS.md) core workflow says "Fix material findings, validate, commit, and re-review".
-- The OpenCode orchestrator says "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict."
+**Decision D7 (approved, amended by Supervised Execution U1):** within a single `/implement-spec` authorization, the orchestrator may perform at most one bounded automatic remediation cycle when the initial independent review returns `CHANGES_REQUIRED` and every finding is eligible. After one remediation attempt, any remaining `CHANGES_REQUIRED` verdict stops and requires a new explicitly user-initiated bounded unit. This does not authorize the next unit.
 
-**Decision D7 (approved):** the portable `/implement-spec` contract adopts stop-after-verdict semantics. `CHANGES_REQUIRED` must not trigger automatic remediation. Fixes and re-review run only as a new, explicitly user-initiated bounded unit, typically after a `REMEDIATE_FINDINGS` recommendation.
+> **Amendment note (Supervised Execution v1).** [`docs/specs/supervised-execution-v1.md`](./supervised-execution-v1.md) U1 has amended D7 and updated the wording in [AGENTS.md](../../AGENTS.md) and [commands/implement-spec.md](../../commands/implement-spec.md). Supervised Execution U2 owns the matching OpenCode `/implement-spec` and orchestrator changes. Phase A U4 verifies that the Decision Helper rules and assessment contract remain consistent with the amended portable/OpenCode contracts, updating only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does not re-edit the portable or OpenCode `/implement-spec` contracts.
 
-> **Amendment note (Supervised Execution v1).** If [`docs/specs/supervised-execution-v1.md`](./supervised-execution-v1.md) lands first, D7 is amended to allow one bounded automatic remediation cycle per `/implement-spec` when all findings are eligible. In that case, Supervised Execution U1 owns the wording change to this decision and the edits to `AGENTS.md` and `commands/implement-spec.md`; Supervised Execution U2 owns the OpenCode `/implement-spec` and orchestrator changes. Phase A U4 then verifies Decision Helper consistency with the amended contracts and updates only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does not re-edit the portable or OpenCode `/implement-spec` contracts.
-
-Proposed wording for both portable files if Supervised Execution v1 does not land: "If `CHANGES_REQUIRED`, stop and report; fixes and re-review run only as a new explicit user-initiated unit."
-
-This change is assigned to U4 and is **not made by this SPEC change**; the operational command files are untouched here, unless amended by Supervised Execution v1 as described above. Until U4 lands, 6.4 states that the Decision Helper's output does not trigger the portable loop.
+The advisory-only Decision Helper behavior in 6.4 is preserved: a `REMEDIATE_FINDINGS` recommendation still requires a new explicit user command and never executes automatically.
 
 ## 8. Acceptance criteria
 
@@ -468,9 +462,9 @@ This change is assigned to U4 and is **not made by this SPEC change**; the opera
 
 - AC-I.1 `sync-install.sh` manifest contains `commands/assess.md`; `test-sync-install.sh` passes with `NMAN=15` and an assess block.
 - AC-I.2 `test-doctor.sh`, `test-review-route.sh`, and `test-resolve-model-family.sh` pass unchanged.
-- AC-I.3 OpenCode `/implement-spec` step 19 and the orchestrator "stop after the first verdict" wording are unchanged.
+- AC-I.3 OpenCode `/implement-spec` step 19 and the orchestrator "stop after the first verdict" wording are unchanged except as amended by Supervised Execution U2; Phase A U4 does not edit them.
 - AC-I.4 Checkpoint and resolution wording is unchanged.
-- AC-I.5 Portable `commands/implement-spec.md` and `AGENTS.md` no longer describe automatic remediation or re-review (D7, U4).
+- AC-I.5 Portable `commands/implement-spec.md` and `AGENTS.md` describe at most one bounded automatic remediation cycle per amended D7 (Supervised Execution U1); Phase A U4 does not re-edit them.
 
 **A5 — Regression scenarios**
 
@@ -864,7 +858,7 @@ One unit per `/implement-spec`, sequential, each `standard` or higher, each inde
 | **U1** | `policies/verification-assessment.md`; the 9.1 fixtures in `examples/assessment/`; `integrations/opencode/scripts/test-assessment-fixtures.sh` | — | New test passes; existing four suites pass; no behavior change |
 | **U2** | Template annotation conventions, two new lines, model/family wording (section 4) | U1 | `git diff` shows no removed fields; links resolve; suites pass |
 | **U3** | `commands/assess-change.md`, `integrations/opencode/commands/assess.md`, manifest +1, `test-sync-install.sh` update, README install list | U1 | `test-sync-install.sh` (`NMAN=15`) and `test-doctor.sh` pass; manual `/assess` on S2, S4a and S4b inputs matches the fixtures |
-| **U4** | OpenCode `/implement-spec` and orchestrator report integration; AGENTS.md and README workflow step; portable stop-after-verdict semantics (D7, 7.1) | U3 | Checkpoint/resolution/OpenCode stop wording diff-checked as unchanged; AC-I.5; suites pass; manual run shows the block and stops |
+| **U4** | OpenCode `/implement-spec` and orchestrator report integration; AGENTS.md and README workflow step; verify Decision Helper consistency with amended D7 (7.1) | U3 | Checkpoint/resolution/OpenCode stop wording diff-checked as unchanged by Phase A edits; AC-I.3/AC-I.5; suites pass; manual run shows the block and stops |
 | **U5** | PRODUCT.md CURRENT STATE update; SPEC status → Implemented | U4 | Links resolve; content describes only implemented behavior |
 
 **Recommended first unit:** U1. It is a pure contract plus tests and changes no runtime behavior.
@@ -879,14 +873,14 @@ One unit per `/implement-spec`, sequential, each `standard` or higher, each inde
 | D4 | `PREPARE_NEXT_UNIT` requires a recorded `[human]` acceptance of the current unit (6.2 rule 10). The recommendation never authorizes automatic implementation. Rationale: the next unit starts only by user choice. Implications: rule 10 and fixture S10 stand as written; preparing or starting the next unit still needs a new explicit user command (6.4) | **Approved** by the user (decision closure after review cycle 4) |
 | D5 | Required environments are those named by acceptance criteria or project `AGENTS.md`; environment names remain project-defined. Rationale: Phase A defines no environment catalogue. Implications: I6/I7 (3.1) stand as written; fixture environment names (`production`, `supabase-test`) are illustrative | **Approved** by the user (decision closure after review cycle 4) |
 | D6 | `docs/specs/` is the location for Phase A specifications | **Approved** by the user (review cycle 3 authorization) |
-| D7 | The portable `/implement-spec` contract adopts stop-after-verdict semantics; `CHANGES_REQUIRED` never triggers automatic remediation (7.1) | **Approved** by the user (review cycle 3 authorization); implementation assigned to U4 |
+| D7 | Within a single `/implement-spec` authorization, the orchestrator may perform at most one bounded automatic remediation cycle when the initial independent review returns `CHANGES_REQUIRED` and every finding is eligible; after one attempt, any remaining `CHANGES_REQUIRED` requires a new user-initiated bounded unit (7.1). Amended by Supervised Execution U1; OpenCode contract changes owned by Supervised Execution U2; Phase A U4 verifies consistency | **Approved** by the user (review cycle 3 authorization); amended by Supervised Execution U1; implementation assigned to Supervised Execution U2 and Phase A U4 as described in 7.1 |
 
 Risks:
 
 - **LLM rule-application drift without a committed reducer.** Mitigation: a single-source policy, a total cap table, fixed output blocks, complete fixtures, and manual fixture checks in review.
 - **Longer orchestrator reports.** Mitigation: fixed compact blocks, with `none` for empty fields.
 - **Recommendation mistaken for authorization.** Mitigation: an explicit "advisory only — nothing has been executed" header, a Required authorization line, and no continuation or retry.
-- **Portable/OpenCode stop semantics differ until U4 lands D7.** Mitigation: 6.4.
+- **Portable/OpenCode stop semantics differ until Supervised Execution U2 updates the OpenCode contract to match amended D7.** Mitigation: 6.4.
 - **Old evidence over-trusted.** Mitigation: commit-bound evidence and `stale`.
 - **Every resolver block now requires a human decision, including simple setup failures.** This is deliberate: provenance cannot be re-established safely after the fact (6.2 rule 2). Expect more human prompts when setup is broken; `/doctor` remains the remedy for setup itself.
 - **9Router attribution ambiguity remains** (a known limitation in [docs/PRODUCT.md](../PRODUCT.md)). Phase A surfaces it as a `blocked` review and does not resolve it.
@@ -899,7 +893,7 @@ Risks:
 | --- | --- | --- | --- | --- |
 | R1 | blocking | Readiness not exhaustive | Partial fix | Still open → R2-1 |
 | R2 | blocking | Handoff extension duplicated fields | Annotations on existing fields; two new lines | Resolved |
-| R3 | blocking | Portable flow permits automatic remediation | Specified in 7.1; now D7 approved, U4 | Resolved |
+| R3 | blocking | Portable flow permits automatic remediation | Specified in 7.1; D7 amended by Supervised Execution U1; OpenCode contract changes owned by Supervised Execution U2 | Resolved |
 | R4 | blocking | OTP fixture contradictory | S4a / S4b | Resolved |
 | R5 | blocking | Staleness overbroad | Freshness by reviewed vs assessed commit | Resolved |
 | R6 | non-blocking | Security fixture semantics | S5a / S5b | Resolved |
