@@ -178,6 +178,7 @@ OPEN → REMEDIATED → VERIFIED → CLOSED
 - `REMEDIATED`: the remediation agent produced a commit intended to address it.
 - `VERIFIED`: the focused reviewer confirms the fix and finds no regression.
 - `CLOSED`: the focused reviewer returns `PASS` or `PASS_WITH_NOTES`; all verified findings close.
+- Focused re-review `CHANGES_REQUIRED`: an original finding the re-review confirms as resolved moves to `VERIFIED` and stays `VERIFIED`; it does not become `CLOSED`. New findings raised in the re-review are `OPEN`. The one-attempt stop still applies.
 
 A finding never returns to `OPEN` without concrete regression evidence in a later review. A finding that the focused reviewer does not re-check keeps status `OPEN` (or `REMEDIATED`, depending on its last known state) and is reported as unresolved.
 
@@ -248,10 +249,10 @@ Supervised Execution Report:
 - Unit: <name>
 - Final commit: <sha>
 - Validation status: <passed|partial|failed|...> — <summary>
-- Initial implementation model family: <family>
-- Remediation model family: <family> | not_applicable
-- Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)>
-- Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable>
+- Initial implementation model family: <family> | not_applicable | NOT_REACHED
+- Remediation model family: <family> | not_applicable | NOT_REACHED
+- Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)|NOT_REACHED>
+- Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable|NOT_REACHED>
 - Orchestrator verification: <VERIFIED|PARTIALLY_VERIFIED|FAILED>
 - Findings resolved: <id>, ... | none
 - Findings unresolved: <id> — <status>, ... | none
@@ -260,6 +261,8 @@ Supervised Execution Report:
 ```
 
 Empty lists are written `none`, never omitted.
+
+Findings resolved lists every finding whose latest ledger status is `VERIFIED` or `CLOSED`. Remediation model family is `NOT_REACHED` when the remediation path is never entered because the orchestrator stopped before it (for example, completion verification `FAILED`); otherwise it is the resolved family or `not_applicable`.
 
 The report avoids duplicating full implementation and review transcripts; it references them by commit and review cycle.
 
@@ -428,7 +431,7 @@ These scenarios are assumption-based fixtures for verification; they are not his
 - Initial review: `CHANGES_REQUIRED` with one blocking finding (missing input validation).
 - Remediation: adds validation, commits.
 - Re-review: `CHANGES_REQUIRED` with a new finding (validation rejects valid input).
-- Expected: orchestrator stops; no second remediation; ledger shows `R1-1: CLOSED`, `R2-1: OPEN`; final report recommends new user-initiated unit.
+- Expected: orchestrator stops; no second remediation; ledger shows `R1-1: VERIFIED`, `R2-1: OPEN`; final report recommends new user-initiated unit.
 
 ### 12.3 SC-3: ineligible finding stops
 

@@ -202,7 +202,7 @@ Orchestration report fields:
 - Remediation attempt count: 0 | 1 (or not_applicable when review not required);
 - Remediation start checkpoint: <id>, or "not captured" if remediation did not run;
 - Remediation end checkpoint: <id>, or "not captured" if remediation did not complete;
-- Remediation model family: <family> | not_applicable;
+- Remediation model family: <family> | not_applicable | NOT_REACHED;
 - Re-reviewer: <reviewer> | not_applicable;
 - Re-review verdict: PASS | PASS_WITH_NOTES | CHANGES_REQUIRED | not_applicable;
 - Findings resolved: <id>, ... | none;
@@ -211,7 +211,7 @@ Orchestration report fields:
 - Recommended next action: <action>;
 - unresolved risks.
 
-When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, and re-review fields as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
+When Orchestrator verification is FAILED, the review decision is never evaluated: report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, Remediation model family, and re-review fields as NOT_REACHED. Start checkpoint and End checkpoint stay reported (end_id stays captured).
 
 Concise final report (terminal block, emitted on every terminal path):
 ```text
@@ -220,7 +220,7 @@ Supervised Execution Report:
 - Final commit: <sha>
 - Validation status: <passed|partial|failed|...> — <summary>
 - Initial implementation model family: <family> | not_applicable | NOT_REACHED
-- Remediation model family: <family> | not_applicable
+- Remediation model family: <family> | not_applicable | NOT_REACHED
 - Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)|NOT_REACHED>
 - Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable|NOT_REACHED>
 - Orchestrator verification: <VERIFIED|PARTIALLY_VERIFIED|FAILED>
@@ -229,7 +229,7 @@ Supervised Execution Report:
 - Required human decision: <what and why> | none
 - Recommended next action: <action>
 ```
-Empty lists are written `none`, never omitted. The concise report references commits and review cycles; it does not repeat full implementation or review transcripts.
+Empty lists are written `none`, never omitted. The concise report references commits and review cycles; it does not repeat full implementation or review transcripts. Findings resolved lists every finding whose latest ledger status is `VERIFIED` or `CLOSED`.
 
 Example, partially verified (not complete):
 ```

@@ -61,7 +61,7 @@ Execute the v3b.2 implementation, runtime model resolution, and conditional revi
     - require read-only review against the authoritative SPEC/task, repository instructions, committed diff, validation evidence, acceptance criteria, regressions, and relevant security/data boundaries;
     - require exactly one verdict: PASS, PASS_WITH_NOTES, or CHANGES_REQUIRED;
     - require the reviewer to label each finding with a stable ID and eligibility.
-18. Report: task/SPEC; selected capability tier; delegated agent; implementation result; validation result; implementation commit SHA; Orchestrator verification (VERIFIED | PARTIALLY_VERIFIED | FAILED); Unverified requirements (list or none); Review required (yes/no); Review decision reason; Review/runtime setup (if blocked); Start checkpoint; End checkpoint; Model resolution (resolved|blocked|skipped); Model resolution reason (if blocked); Actual models and providers (if returned); Actual family (if resolved); Reviewer (if resolved and review required); Verdict (if review ran) or the block status; Remediation attempt count (0 or 1); Remediation start/end checkpoints; Remediation model family; Re-reviewer; Re-review verdict; Findings resolved; Findings unresolved; Required human decision; Recommended next action; findings; unresolved risks. When verification is FAILED, report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, and re-review fields as NOT_REACHED.
+18. Report: task/SPEC; selected capability tier; delegated agent; implementation result; validation result; implementation commit SHA; Orchestrator verification (VERIFIED | PARTIALLY_VERIFIED | FAILED); Unverified requirements (list or none); Review required (yes/no); Review decision reason; Review/runtime setup (if blocked); Start checkpoint; End checkpoint; Model resolution (resolved|blocked|skipped); Model resolution reason (if blocked); Actual models and providers (if returned); Actual family (if resolved); Reviewer (if resolved and review required); Verdict (if review ran) or the block status; Remediation attempt count (0 or 1); Remediation start/end checkpoints; Remediation model family (<family> | not_applicable | NOT_REACHED); Re-reviewer; Re-review verdict; Findings resolved; Findings unresolved; Required human decision; Recommended next action; findings; unresolved risks. When verification is FAILED, report Review required, Review decision reason, Model resolution, Actual models and providers, Actual family, Reviewer, Verdict, Remediation attempt count, Remediation model family, and re-review fields as NOT_REACHED.
 
 Finding ledger (session-local):
 - The finding ledger is a lightweight, session-local structure carried by the orchestrator across review cycles. It is emitted in the final report. No database or persistent service is required.
@@ -127,7 +127,7 @@ Supervised Execution Report:
 - Final commit: <sha>
 - Validation status: <passed|partial|failed|...> — <summary>
 - Initial implementation model family: <family> | not_applicable | NOT_REACHED
-- Remediation model family: <family> | not_applicable
+- Remediation model family: <family> | not_applicable | NOT_REACHED
 - Initial reviewer: <reviewer> — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_required|blocked(...)|NOT_REACHED>
 - Re-reviewer: <reviewer> | not_applicable — Verdict: <PASS|PASS_WITH_NOTES|CHANGES_REQUIRED|not_applicable|NOT_REACHED>
 - Orchestrator verification: <VERIFIED|PARTIALLY_VERIFIED|FAILED>
@@ -136,4 +136,4 @@ Supervised Execution Report:
 - Required human decision: <what and why> | none
 - Recommended next action: <action>
 ```
-Empty lists are written `none`, never omitted. The concise report references commits and review cycles; it does not repeat full implementation or review transcripts.
+Empty lists are written `none`, never omitted. The concise report references commits and review cycles; it does not repeat full implementation or review transcripts. Findings resolved lists every finding whose latest ledger status is `VERIFIED` or `CLOSED`.
