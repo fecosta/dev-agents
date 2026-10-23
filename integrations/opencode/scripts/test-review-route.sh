@@ -460,6 +460,34 @@ for f in "$AGENTS" "$ORCH" "$CMD" "$PORT" "$README"; do
   for k in VERIFIED PARTIALLY_VERIFIED FAILED NOT_REACHED; do has "W22 $n: $k" "$f" "$k"; done
 done
 
+# --- U: U2 OpenCode remediation loop (Supervised Execution v1)
+for f in "$ORCH" "$CMD"; do
+  n=$(basename "$f")
+  has "U1 $n one attempt" "$f" "at most one automatic remediation cycle"
+  has "U2 $n eligibility gate" "$f" "eligible only when"
+  has "U3 $n ineligible stops" "$f" "If any finding is ineligible"
+  has "U4 $n no partial remediation" "$f" "do not partially remediate"
+  has "U5 $n treat uncertain as ineligible" "$f" "missing, ambiguous, or uncertain eligibility"
+  has "U6 $n fresh remediation checkpoints" "$f" "rem_start_id"
+  has "U7 $n fresh end checkpoint" "$f" "rem_end_id"
+  has "U8 $n resolve from remediation checkpoints" "$f" "resolve <rem_start_id> <rem_end_id>"
+  has "U9 $n no family fallback" "$f" "do not fall back to the initial implementation family"
+  has "U10 $n second CHANGES_REQUIRED stops" "$f" "do not start a second remediation cycle"
+  has "U11 $n SC-9 agent re-evaluates" "$f" "re-evaluate the eligibility"
+  has "U12 $n SC-9 agent rejects stops" "$f" "make no changes"
+  has "U13 $n validation before remediation commit" "$f" "validation before commit"
+  has "U14 $n completion verification before re-review" "$f" "before any re-review"
+  has "U15 $n fresh re-review session" "$f" "fresh child session against the final commit"
+  has "U16 $n counter no reset" "$f" "do not reset it through delegation"
+done
+# U2-specific fields appear in the orchestrator report list.
+for k in "Remediation attempt count" "Remediation start checkpoint" "Remediation end checkpoint" "Remediation model family" "Re-reviewer" "Re-review verdict" "Findings resolved" "Findings unresolved" "Required human decision" "Recommended next action"; do
+  has "U17 orchestrator report: $k" "$ORCH" "$k"
+done
+# The command file reports the same remediation fields.
+has "U18 command remediation report" "$CMD" "Remediation attempt count"
+has "U19 command re-review verdict" "$CMD" "Re-review verdict"
+
 # --- README wording corrected
 hasnot R1 "$README" "keeps later orchestrator traffic out of the window"
 hasnot R2 "$README" "Traffic after \`end-id\` (including the orchestrator's own) is excluded"
