@@ -82,9 +82,10 @@ A finding is **ineligible** when any of the following hold:
 - Scope expansion or new unit of work.
 - Unresolved blocker, missing dependency, or broken environment.
 - Unexplained failure whose cause has not been identified.
-- The reviewer explicitly marks it as not eligible for automatic remediation.
+- The reviewer marks it `no` or `uncertain` in the `Eligible for automatic remediation` field on [`templates/review-report.md`](../../templates/review-report.md).
+- The reviewer omits the eligibility field and the orchestrator cannot determine eligibility from the finding text.
 
-If **any** finding is ineligible, the orchestrator stops and requests human intervention; it does not remediate the eligible subset and defer the ineligible subset.
+If **any** finding is ineligible, the orchestrator stops and requests human intervention; it does not remediate the eligible subset and defer the ineligible subset. Missing, ambiguous, or `uncertain` eligibility information is treated as ineligible.
 
 ### 3.3 Remediation attempt limit
 
@@ -100,6 +101,7 @@ The remediation cycle follows the same safeguards as the initial implementation:
 - Capture a start checkpoint immediately before delegating to a remediation agent.
 - Delegate to the minimum safe capability tier (may differ from the initial tier if the finding nature justifies it; control-plane minimum `standard`).
 - Require the remediation agent to implement only the eligible findings within the bounded unit.
+- Require the remediation agent to re-evaluate the eligibility of each finding before implementing; if it judges any finding ineligible, it must stop, report the finding IDs and reasons, and make no changes.
 - Require validation before commit.
 - Commit only after validation passes.
 - Capture an end checkpoint immediately after the child returns.
@@ -185,35 +187,53 @@ A finding never returns to `OPEN` without concrete regression evidence in a late
 - New findings raised in the focused review receive new IDs.
 - The ledger is included in the final report so the user can trace each finding from initial raise through remediation to closure or remaining open.
 
+### 5.4 Mapping to Phase A I10
+
+The Supervised Execution ledger is an orchestration-session structure. When the Decision Helper assesses the unit, ledger statuses map to Phase A I10 (`open`, `resolved`, `unknown`) as follows:
+
+| Ledger status | Phase A I10 status | Meaning |
+| --- | --- | --- |
+| `OPEN` | `open` | Raised, not yet addressed by remediation. |
+| `REMEDIATED` | `open` | A remediation commit exists, but no later review has verified it. |
+| `VERIFIED` | `resolved` | The focused reviewer confirmed the fix and found no regression. |
+| `CLOSED` | `resolved` | The focused review returned `PASS` or `PASS_WITH_NOTES`; all verified findings close. |
+| `OPEN` / `REMEDIATED` not re-checked by the focused reviewer | `unknown` | The later review did not re-examine the finding. |
+
+A finding moves from `resolved` back to `open` only when a later review provides concrete regression evidence.
+
 ## 6. Validation efficiency
 
 ### 6.1 Evidence reuse
 
+Each validation command must declare the files, file globs, or project-specific dependency surface it covers. The declaration can live in the project `AGENTS.md`, the SPEC/task acceptance criteria, or the implementation handoff. If a command's scope is not declared, the orchestrator treats it as covering the whole repository for staleness purposes.
+
 Valid validation evidence may be reused when:
 
 - The validation command is identical.
-- The files and dependency graph it covers are unchanged at the final commit.
+- The declared scope (files, globs, or dependency surface) is unchanged at the final commit.
+- No file in the declared scope changed between the evidence commit and the final commit.
 - The execution environment is unchanged (same tool versions, same environment variables that affect the command).
 - The evidence is bound to a commit that is an ancestor of the final commit.
 
 Evidence is **stale** and must not be reused when:
 
 - The referenced commit is not the current assessed commit or an ancestor of it.
-- Any file in the validation scope changed after the evidence was produced.
-- The dependency graph of the validated surface changed.
-- The validation command, tool version, or relevant environment changed.
+- Any file in the declared scope changed after the evidence was produced.
+- The declared scope, command, tool version, or relevant environment changed.
+- The orchestrator cannot determine whether the scope or environment is unchanged.
 - The original evidence was `partial`, `not_run`, `unknown`, or `failed`.
 
 ### 6.2 Targeted validation for remediation
 
-After remediation, run only the validation commands whose scope intersects the remediated files or their direct dependency graph, plus any commands that previously failed.
+After remediation, run only the validation commands whose declared scope intersects the remediated files, plus any commands that previously failed. Projects may declare a dependency surface (for example, module import graph or build-system edges) in their `AGENTS.md` or SPEC; if no dependency surface is declared, use file intersection only.
 
 Run broader validation when:
 
 - The remediation touches shared/core files.
-- The dependency graph changes.
+- A declared dependency surface changed.
 - A project policy or acceptance criterion requires the full suite.
 - The initial validation had unexplained failures.
+- The orchestrator cannot determine whether a narrower command is safe.
 
 ### 6.3 Stale evidence handling
 
@@ -272,21 +292,21 @@ The OpenCode integration ([`integrations/opencode/commands/implement-spec.md`](.
 
 ### 9.2 Affected decisions and contracts
 
-| Decision / contract | Current state | Required change |
-| --- | --- | --- |
-| Phase A D7 | Approved stop-after-verdict; U4 not yet landed | Amend D7 to allow one bounded automatic remediation attempt per `/implement-spec`; keep advisory-only next-unit behavior |
-| Phase A §6.4 | Decision Helper output does not trigger portable remediation loop | Retain: `/assess` remains advisory; `/implement-spec` owns the one remediation attempt |
-| [`commands/implement-spec.md`](../../commands/implement-spec.md) step 17 | "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | Update to one-remediation semantics |
-| [`AGENTS.md`](../../AGENTS.md) core workflow | "Fix material findings, validate, commit, and re-review" | Update to one-remediation semantics |
-| OpenCode `/implement-spec` and orchestrator | "Do not automatically remediate `CHANGES_REQUIRED`. Stop after the first verdict." | Add the eligible-finding gate and one-remediation loop; stop after second `CHANGES_REQUIRED` |
+| Decision / contract | Current state | Owner | Required change |
+| --- | --- | --- | --- |
+| Phase A D7 | Approved stop-after-verdict; U4 not yet landed | Supervised Execution U1 (wording); Phase A U4 (verification of alignment) | Amend D7 wording to allow one bounded automatic remediation attempt per `/implement-spec`; keep advisory-only next-unit behavior |
+| Phase A §6.4 | Decision Helper output does not trigger portable remediation loop | Phase A U4 | Retain: `/assess` remains advisory; `/implement-spec` owns the one remediation attempt |
+| [`commands/implement-spec.md`](../../commands/implement-spec.md) step 17 | "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | Supervised Execution U1 | Update to one-remediation semantics |
+| [`AGENTS.md`](../../AGENTS.md) core workflow | "Fix material findings, validate, commit, and re-review" | Supervised Execution U1 | Update to one-remediation semantics |
+| OpenCode `/implement-spec` and orchestrator | "Do not automatically remediate `CHANGES_REQUIRED`. Stop after the first verdict." | Supervised Execution U2 | Add the eligible-finding gate and one-remediation loop; stop after second `CHANGES_REQUIRED` |
 
 ### 9.3 Recommended resolution
 
-Implement Supervised Execution v1 **before** Phase A U4 lands. Update D7 to:
+Implement Supervised Execution U1 and U2 **before** Phase A U4 lands. Supervised Execution U1 updates the wording of D7 in the Phase A SPEC and changes the portable contracts; U2 changes the OpenCode adapter. Phase A U4 then verifies that the Decision Helper rules and assessment contract remain consistent with the amended portable/OpenCode contracts, updating only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does **not** re-edit `AGENTS.md`, `commands/implement-spec.md`, or the OpenCode `/implement-spec` / orchestrator files.
+
+Updated D7 wording:
 
 > Within a single `/implement-spec` authorization, the orchestrator may perform at most one bounded automatic remediation cycle when the initial independent review returns `CHANGES_REQUIRED` and every finding is eligible. After one remediation attempt, any remaining `CHANGES_REQUIRED` verdict stops and requires a new explicitly user-initiated bounded unit. This does not authorize the next unit.
-
-Phase A U4 then implements the amended D7 semantics across portable and OpenCode contracts instead of the original stop-after-verdict wording.
 
 ### 9.4 Distinguishing remediation from a new unit
 
@@ -303,12 +323,12 @@ Phase A U4 then implements the amended D7 semantics across portable and OpenCode
 
 Four independently verifiable units. Each unit is at least `standard` and requires independent opposite-family review.
 
-| Unit | Delivers | Depends on | Validation |
-| --- | --- | --- | --- |
-| **U1** | Contract reconciliation: update [`commands/implement-spec.md`](../../commands/implement-spec.md) and [`AGENTS.md`](../../AGENTS.md) core workflow to one-remediation semantics; amend Phase A D7 wording; no runtime behavior change | — | Diff-checked wording; existing suites pass; no behavior change |
-| **U2** | OpenCode remediation loop: add eligible-finding gate, one-attempt counter, remediation delegation with checkpoints, and second-`CHANGES_REQUIRED` stop to OpenCode `/implement-spec` and orchestrator | U1 | Manual runs with `CHANGES_REQUIRED` → eligible findings produce one remediation and re-review; ineligible findings stop; second `CHANGES_REQUIRED` stops |
-| **U3** | Finding ledger, focused re-review scope, and concise final report: define ledger format; update reviewer prompt to focus on original findings + regressions; emit the §7 report block | U2 | Review reports contain stable finding IDs; final report contains ledger and recommended next action |
-| **U4** | Validation efficiency policy and Phase A integration: document evidence-reuse and targeted-validation rules; ensure `/assess` Decision Helper rules remain consistent with the one-attempt remediation contract; sync-install/manifest/tests if new command files are added | U3 | Test fixtures cover stale evidence, targeted validation, and Phase A `REQUEST_HUMAN_DECISION` after one failed remediation; existing suites pass |
+| Unit | Delivers | Owner of edits | Depends on | Validation |
+| --- | --- | --- | --- | --- |
+| **U1** | Contract reconciliation: update [`commands/implement-spec.md`](../../commands/implement-spec.md) and [`AGENTS.md`](../../AGENTS.md) core workflow to one-remediation semantics; amend Phase A D7 wording; no runtime behavior change | Supervised Execution | — | Diff-checked wording; existing suites pass; no behavior change |
+| **U2** | OpenCode remediation loop: add eligible-finding gate, one-attempt counter, remediation delegation with checkpoints, and second-`CHANGES_REQUIRED` stop to OpenCode `/implement-spec` and orchestrator | Supervised Execution | U1 | Manual runs with `CHANGES_REQUIRED` → eligible findings produce one remediation and re-review; ineligible findings stop; second `CHANGES_REQUIRED` stops; remediation agent rejects ineligible findings |
+| **U3** | Finding ledger, focused re-review scope, and concise final report: define ledger format; update reviewer prompt to focus on original findings + regressions; emit the §7 report block | Supervised Execution | U2 | Review reports contain stable finding IDs and eligibility fields; final report contains ledger and recommended next action |
+| **U4** | Validation efficiency policy and Phase A alignment: document declared-scope evidence-reuse and targeted-validation rules; ensure `/assess` Decision Helper rules remain consistent with the amended one-attempt remediation contract; sync-install/manifest/tests if new command files are added | Supervised Execution + Phase A U4 (see §9.3) | U3 | Test fixtures cover stale evidence, targeted validation, and Phase A `REQUEST_HUMAN_DECISION` after one failed remediation; existing suites pass |
 
 A smaller two-unit split (U1 = contracts; U2 = OpenCode behavior + ledger + reporting + validation efficiency + tests) is acceptable if review shows the combined change remains bounded and independently verifiable.
 
@@ -442,6 +462,12 @@ These scenarios are assumption-based fixtures for verification; they are not his
 - Unit passes after remediation; an approved split has a next unit.
 - Expected: final report recommends `PREPARE_NEXT_UNIT` or `ACCEPT_UNIT` but does not start it; starting the next unit requires a new `/implement-spec`.
 
+### 12.9 SC-9: remediation agent rejects ineligible finding
+
+- Initial review: `CHANGES_REQUIRED` with one finding marked eligible by the reviewer (for example, a missing assertion).
+- Remediation agent re-evaluates the finding and judges it ineligible (for example, the assertion touches a security-sensitive path not covered by the unit).
+- Expected: remediation agent stops without changes; orchestrator reports the finding as ineligible and requests human decision; no commit is made; no re-review is launched.
+
 ## 13. Decisions, open questions, and risks
 
 | ID | Item | Status / recommendation |
@@ -450,9 +476,9 @@ These scenarios are assumption-based fixtures for verification; they are not his
 | D2 | Remediation may use the same capability tier as the initial implementation or a different tier; the orchestrator decides based on finding risk/complexity. | Proposed |
 | D3 | Finding ledger is session-local; no persistent store in v1. | Proposed |
 | D4 | Re-review is opposite-family to the remediation agent, not the initial reviewer. | Proposed |
-| R1 | Risk: an LLM misclassifies an ineligible finding as eligible and makes an unauthorized architecture or security decision. Mitigation: hard eligibility rules, required human approval for security/architecture/scope expansion, and review of the orchestrator's eligibility decision in test scenarios. | Open |
-| R2 | Risk: stale validation evidence is reused. Mitigation: fail-closed staleness rules and explicit tests. | Open |
-| R3 | Risk: Phase A U4 is implemented before D7 is amended, causing a contract contradiction. Mitigation: implement Supervised Execution v1 U1 before Phase A U4. | Open |
+| R1 | Risk: an LLM misclassifies an ineligible finding as eligible and makes an unauthorized architecture or security decision. Mitigation: hard eligibility rules, required human approval for security/architecture/scope expansion, reviewer marks ineligibility explicitly, remediation agent re-evaluates and rejects ineligible findings, and U2 includes SC-9. | Open |
+| R2 | Risk: stale validation evidence is reused. Mitigation: declared-scope reuse rules, fail-closed when scope is unknown, and explicit tests in U4. | Open |
+| R3 | Risk: Supervised Execution and Phase A U4 edit the same contracts, causing duplicate or conflicting changes. Mitigation: Supervised Execution U1/U2 own `AGENTS.md`, `commands/implement-spec.md`, and OpenCode `/implement-spec` / orchestrator; Phase A U4 edits only Phase A-specific files and verifies alignment. | Open |
 
 ## 14. Review record
 
