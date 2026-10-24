@@ -109,9 +109,19 @@ Verdict text is copied verbatim and never rewritten, softened, or reinterpreted.
 5. The implementation handoff or `/handoff` output `[reported]`.
 6. User statements `[human]`.
 
-### 6.2 Assessed commit
+### 6.2 Evidence resolution rules
 
-The commit the user names, otherwise the unit's resulting commit `[observed]` (normally `HEAD` of the unit branch). If neither can be determined, `assessed_commit = unknown`.
+**Assessed commit.** Use the commit the user names, otherwise the unit's resulting commit `[observed]` (normally `HEAD` of the unit branch). If neither can be determined, `assessed_commit = unknown`.
+
+**Authority order resolves conflicts.** When two sources disagree, the authority order in 6.1 wins. A disagreement resolved by that order is recorded as a conflict with status `resolved_by_authority`. Any disagreement not resolved by the authority order is `unresolved` and caps readiness at `blocked`.
+
+**Handoff commit mismatch.** If the handoff's resulting commit differs from `assessed_commit`, this is a `resolved_by_authority` conflict: implementation is taken from `[observed]` Git state, and validation results that the handoff ties to a different commit (or to no commit) are `unknown` for the assessed commit. It is not a stale review.
+
+**Commit-bound validation.** A validation result proves correctness only for the commit it was produced against. Evidence whose commit is not `assessed_commit` or an ancestor of it, or whose scope or environment cannot be proven unchanged, is treated as `unknown`.
+
+**Failure classification.** A failed validation or environment check is `cause: unexplained` unless evidence identifies the cause. Hypotheses are not identified causes. An unexplained failure is never treated as an application defect.
+
+**Reviewer verdict governs; implementer claims are `[reported]`.** The assessor never overrides or reinterprets a verdict. Disagreement with a verdict is an `unresolved` conflict requiring human decision.
 
 ### 6.3 Review freshness
 

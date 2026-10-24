@@ -46,26 +46,65 @@ scope_intersects_changes() {
   return 1
 }
 
-# decide_evidence_reuse <command> <result> <evidence_commit> <final_commit> <scope_spec> [dependency_surface_file]
+# decide_evidence_reuse <evidence_command> <current_command> <result> <label>
+#                     <evidence_commit> <final_commit>
+#                     <evidence_scope> <current_scope> [dependency_surface_file]
+#                     [tool_version] [current_tool_version]
+#                     [env_fingerprint] [current_env_fingerprint]
 # Prints "reused <reason>" or "stale <reason>".
 decide_evidence_reuse() {
-  local cmd="$1" result="$2" evidence="$3" final="$4" scope="$5" dep_surface="${6:-}"
+  local evidence_command="$1" current_command="$2" result="$3" label="$4"
+  local evidence="$5" final="$6"
+  local evidence_scope="$7" current_scope="$8"
+  local dep_surface="${9:-}"
+  local evidence_tool="${10:-}" current_tool="${11:-}"
+  local evidence_env="${12:-}" current_env="${13:-}"
+
+  # Evidence must be complete and trustworthy.
   case "$result" in
     passed) ;;
     partial|not_run|unknown|failed*) echo "stale result=$result"; return ;;
     *) echo "stale unknown_result=$result"; return ;;
   esac
+
+  case "$label" in
+    "[observed]") ;;
+    *) echo "stale label=$label (not [observed])"; return ;;
+  esac
+
+  # Command identity and declared scope must be unchanged.
+  if [ "$evidence_command" != "$current_command" ]; then
+    echo "stale command changed from '$evidence_command' to '$current_command'"
+    return
+  fi
+  if [ "$evidence_scope" != "$current_scope" ]; then
+    echo "stale scope declaration changed from '$evidence_scope' to '$current_scope'"
+    return
+  fi
+
+  # Tool version and relevant environment must be unchanged when declared.
+  if [ -n "$evidence_tool" ] && [ "$evidence_tool" != "$current_tool" ]; then
+    echo "stale tool_version changed from '$evidence_tool' to '$current_tool'"
+    return
+  fi
+  if [ -n "$evidence_env" ] && [ "$evidence_env" != "$current_env" ]; then
+    echo "stale env_fingerprint changed from '$evidence_env' to '$current_env'"
+    return
+  fi
+
   if ! evidence_commit_is_ancestor "$evidence" "$final"; then
     echo "stale evidence_commit=$evidence is not an ancestor of final_commit=$final"
     return
   fi
-  if scope_intersects_changes "$evidence" "$final" "$scope" "$dep_surface"; then
-    if [ -z "$scope" ]; then
+
+  if scope_intersects_changes "$evidence" "$final" "$current_scope" "$dep_surface"; then
+    if [ -z "$current_scope" ]; then
       echo "stale scope=repository-wide and files changed after $evidence"
     else
       echo "stale scope file or dependency surface changed after $evidence"
     fi
     return
   fi
-  echo "reused command='$cmd' scope_unchanged since $evidence"
+
+  echo "reused command='$current_command' scope_unchanged since $evidence"
 }
