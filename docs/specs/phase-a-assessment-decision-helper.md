@@ -15,7 +15,7 @@ Paths written as code spans (for example `policies/verification-assessment.md`) 
 
 ## 0. Purpose and non-goals
 
-The OpenCode workflow stops after the first review verdict ([agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md), "Review decision"). It does not say what was actually verified or what to do next. In the Huellas authentication work, three things went wrong:
+The OpenCode workflow previously stopped after the first review verdict; Supervised Execution v1 U2 added one bounded automatic remediation cycle when all findings are eligible. It does not say what was actually verified or what to do next. In the Huellas authentication work, three things went wrong:
 
 - Passing tests and a `PASS` verdict were treated as "done" while production and security checks were still pending.
 - Test-fixture failures looked like application defects.
@@ -43,7 +43,7 @@ Non-goals:
 | Routing | `economy` / `standard` / `strong` / `premium`; control-plane minimum `standard` | [policies/model-routing.md](../../policies/model-routing.md), [commands/route-task.md](../../commands/route-task.md) |
 | Bounded units | Vertical slices, one unit per `/implement-spec`, no automatic continuation | [commands/split-spec.md](../../commands/split-spec.md) |
 | Implementation flow (portable) | "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | [commands/implement-spec.md](../../commands/implement-spec.md) |
-| Implementation flow (OpenCode) | Start/end checkpoints (mandatory), delegation, review decision, runtime family resolution, fail-closed reasons, report fields; "Do not automatically remediate CHANGES_REQUIRED. Stop after the first verdict." | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md), [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) |
+| Implementation flow (OpenCode) | Start/end checkpoints (mandatory), delegation, review decision, runtime family resolution, fail-closed reasons, report fields; one bounded automatic remediation cycle when all findings are eligible, then stop | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md), [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) |
 | Runtime provenance | `review-route.sh` checkpoint/resolve; `resolve-model-family.sh` key=value contract with documented block reasons. Resolution reads the *current* `usageHistory` rows and `combos` definition | [integrations/opencode/README.md](../../integrations/opencode/README.md), [resolve-model-family.sh](../../integrations/opencode/scripts/resolve-model-family.sh), [review-route.sh](../../integrations/opencode/scripts/review-route.sh) |
 | Review | Opposite-family reviewer; verdicts `PASS` / `PASS_WITH_NOTES` / `CHANGES_REQUIRED`; blocking / non-blocking findings | [policies/review-routing.md](../../policies/review-routing.md), [templates/review-report.md](../../templates/review-report.md), [commands/review-change.md](../../commands/review-change.md) |
 | Handoff (template) | Unit, start/result commit, tier, model/family, reviewer, files, tests, lint/build, risks, next phase | [templates/implementation-handoff.md](../../templates/implementation-handoff.md) |
@@ -61,7 +61,7 @@ No SPEC convention existed before this document; earlier SPECs were task prompts
 | Partial verification and missing evidence | "Not run" wording in `/handoff`; fail-closed resolver reasons | No uniform representation of absent evidence | A1: every input whose evidence can be absent has an explicit absent-evidence value; fail closed |
 | Observed vs asserted evidence | Orchestrator does not trust child self-reported family | No general labeling for other evidence | A1 evidence labels |
 | Finding identity across review cycles | Free-text findings per report | Cycle-2 findings can be confused with cycle-1 findings | A2 finding IDs `R<cycle>-<n>` |
-| Interpreting results into a next action | OpenCode orchestrator stops after the first verdict. Portable `/implement-spec` allows at most one bounded automatic remediation cycle when all findings are eligible (D7 amended by Supervised Execution U1) | No structured recommendation; portable/OpenCode stop semantics still differ until Supervised Execution U2 updates the OpenCode contract | A3 assessment + A4 Decision Helper; D7 amended by Supervised Execution U1, verified by Phase A U4 |
+| Interpreting results into a next action | OpenCode orchestrator now implements one bounded automatic remediation cycle (Supervised Execution U2). Portable `/implement-spec` and `AGENTS.md` describe the same one-remediation contract (D7 amended by Supervised Execution U1) | No structured recommendation; no advisory next-action output after the orchestrator stops | A3 assessment + A4 Decision Helper; D7 amended by Supervised Execution U1, verified by Phase A U4 |
 | Re-assessment after out-of-band evidence (e.g. a production check) | None | No entry point | `/assess` command |
 | Handoff model/family fields | Template has "Actual implementation model/family", but the child returns its handoff before resolution runs, and the orchestrator forbids child self-report | Ambiguous ownership | A2: child writes `pending`; orchestrator report is authoritative (4.3) |
 
@@ -385,7 +385,7 @@ Decision Helper (advisory only — nothing has been executed):
 - The Decision Helper never executes, delegates, schedules, or retries its recommendation. The turn ends after the block.
 - Each next action requires a new explicit user command, for example `/implement-spec` for remediation or `/review-change` for re-review.
 - It never initiates implementation, push, merge, deployment, history rewrite, or production changes. These may appear only as steps the user performs, with the required explicit authorization named.
-- It runs after the OpenCode orchestrator's "stop after the first review verdict" point and also stops.
+- It runs after the OpenCode orchestrator has produced its final report and stops.
 - Its output is never authorization for any remediation loop. Supervised Execution U1 amended the portable contracts in [AGENTS.md](../../AGENTS.md) and [commands/implement-spec.md](../../commands/implement-spec.md) to allow at most one bounded automatic remediation cycle per `/implement-spec`; the Decision Helper remains advisory-only and a `REMEDIATE_FINDINGS` recommendation still requires a new explicit user command.
 
 ## 7. Integration architecture (minimal)
@@ -393,7 +393,7 @@ Decision Helper (advisory only — nothing has been executed):
 | Change | File(s) | Kind |
 | --- | --- | --- |
 | Portable contract: input domains, labels, readiness caps, verdict mapping, freshness, action set, decision rules. Single source; other files reference it | `policies/verification-assessment.md` (new) | control-plane |
-| Portable procedure for assessment + Decision Helper | `commands/assess-change.md` (new) | control-plane |
+| Portable procedure for assessment + Decision Helper | `commands/assess.md` (new) | control-plane |
 | OpenCode `/assess` command: `agent: orchestrator`, `subagent: false`; text forbids delegation, edits, validation runs, re-resolution, and Git writes; emits the 5.2 and 6.3 blocks | `integrations/opencode/commands/assess.md` (new) | control-plane |
 | Final report appends the Assessment and Decision Helper blocks (also for blocked outcomes); OpenCode "stop" wording unchanged | [integrations/opencode/commands/implement-spec.md](../../integrations/opencode/commands/implement-spec.md) step 18, [agents/orchestrator.md](../../integrations/opencode/agents/orchestrator.md) "Orchestration report fields" | control-plane |
 | Portable one-remediation semantics (D7, 7.1; amended by Supervised Execution U1) | [commands/implement-spec.md](../../commands/implement-spec.md) (`If CHANGES_REQUIRED`, one bounded automatic remediation cycle...), [AGENTS.md](../../AGENTS.md) (one bounded automatic remediation cycle) | control-plane |
@@ -462,7 +462,7 @@ The advisory-only Decision Helper behavior in 6.4 is preserved: a `REMEDIATE_FIN
 
 - AC-I.1 `sync-install.sh` manifest contains `commands/assess.md`; `test-sync-install.sh` passes with `NMAN=15` and an assess block.
 - AC-I.2 `test-doctor.sh`, `test-review-route.sh`, and `test-resolve-model-family.sh` pass unchanged.
-- AC-I.3 OpenCode `/implement-spec` step 19 and the orchestrator "stop after the first verdict" wording are unchanged except as amended by Supervised Execution U2; Phase A U4 does not edit them.
+- AC-I.3 OpenCode `/implement-spec` and the orchestrator implement the one bounded automatic remediation cycle (Supervised Execution U2); Phase A U4 does not edit them.
 - AC-I.4 Checkpoint and resolution wording is unchanged.
 - AC-I.5 Portable `commands/implement-spec.md` and `AGENTS.md` describe at most one bounded automatic remediation cycle per amended D7 (Supervised Execution U1); Phase A U4 does not re-edit them.
 
