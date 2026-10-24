@@ -24,24 +24,31 @@ scope_matches_path() {
 
 # scope_intersects_changes <evidence_commit> <final_commit> <scope_spec> [dependency_surface_file]
 # Returns 0 (true) if the scope intersects changed files or the dependency surface changed.
+# A failed or indeterminate Git comparison also returns 0 so the caller fails closed.
 scope_intersects_changes() {
   local evidence="$1" final="$2" scope="$3" dep_surface="${4:-}"
+  local output
+
   # Empty scope means repository-wide coverage.
   if [ -z "$scope" ]; then
-    local count
-    count=$(git diff --name-only "$evidence" "$final" 2>/dev/null | wc -l | tr -d ' ')
-    [ "$count" -gt 0 ]
+    output=$(git diff --name-only "$evidence" "$final" 2>/dev/null) || return 0
+    [ -n "$output" ]
     return
   fi
+
+  output=$(git diff --name-only "$evidence" "$final" 2>/dev/null) || return 0
   local p
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     if scope_matches_path "$scope" "$p"; then return 0; fi
-  done < <(git diff --name-only "$evidence" "$final" 2>/dev/null)
-  if [ -n "$dep_surface" ] && git diff --quiet "$evidence" "$final" -- "$dep_surface" 2>/dev/null; then
-    : # dependency surface unchanged
-  elif [ -n "$dep_surface" ]; then
-    return 0
+  done <<< "$output"
+
+  if [ -n "$dep_surface" ]; then
+    if git diff --quiet "$evidence" "$final" -- "$dep_surface" 2>/dev/null; then
+      : # dependency surface unchanged
+    else
+      return 0
+    fi
   fi
   return 1
 }

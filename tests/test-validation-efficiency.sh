@@ -40,6 +40,23 @@ mkcommit() {
 
 source "$LIB"
 
+REAL_GIT=$(command -v git)
+FAKE_DIR="$TMP/fake"
+mkdir -p "$FAKE_DIR"
+cat >"$FAKE_DIR/git" <<EOF
+#!/bin/sh
+if [ "\$1" = "diff" ]; then
+  case "\$2" in
+    --name-only|--quiet)
+      echo "fatal: injected diff failure" >&2
+      exit 128
+      ;;
+  esac
+fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$FAKE_DIR/git"
+
 CMD="npm test"
 SCOPE="src/"
 LABEL="[observed]"
@@ -169,6 +186,58 @@ C1=$(git rev-parse HEAD)
 C2=$(mkcommit C16 docs/readme.md)
 out=$(decide_evidence_reuse "$CMD" "$CMD" passed "$LABEL" "$C1" "$C2" "$SCOPE" "$SCOPE" "" "$TOOL" "$TOOL" "" "$ENV")
 case "$out" in stale*env*) ok "16 missing env fingerprint fails closed" ;; *) bad "16 missing env fingerprint fails closed ($out)" ;; esac
+
+# 17. Git diff --name-only failure prevents reuse
+newrepo 17
+C1=$(git rev-parse HEAD)
+C2=$(mkcommit C17 docs/readme.md)
+out=$(PATH="$FAKE_DIR:$PATH" decide_evidence_reuse "$CMD" "$CMD" passed "$LABEL" "$C1" "$C2" "$SCOPE" "$SCOPE" "" "$TOOL" "$TOOL" "$ENV" "$ENV")
+case "$out" in stale*) ok "17 git diff failure prevents reuse" ;; *) bad "17 git diff failure prevents reuse ($out)" ;; esac
+
+# 18. Repository-wide scope with Git diff failure prevents reuse
+newrepo 18
+C1=$(git rev-parse HEAD)
+C2=$(mkcommit C18 docs/readme.md)
+out=$(PATH="$FAKE_DIR:$PATH" decide_evidence_reuse "$CMD" "$CMD" passed "$LABEL" "$C1" "$C2" "" "" "" "$TOOL" "$TOOL" "$ENV" "$ENV")
+case "$out" in stale*) ok "18 repo-wide diff failure prevents reuse" ;; *) bad "18 repo-wide diff failure prevents reuse ($out)" ;; esac
+
+# 19. Dependency-surface Git diff failure prevents reuse
+newrepo 19
+C1=$(git rev-parse HEAD)
+echo "src/a.py -> src/b.py" >deps.txt
+git add deps.txt
+git commit -q -m "add deps"
+C1b=$(git rev-parse HEAD)
+C2=$(mkcommit C19 docs/readme.md)
+out=$(PATH="$FAKE_DIR:$PATH" decide_evidence_reuse "$CMD" "$CMD" passed "$LABEL" "$C1b" "$C2" "$SCOPE" "$SCOPE" "deps.txt" "$TOOL" "$TOOL" "$ENV" "$ENV")
+case "$out" in stale*) ok "19 dep-surface diff failure prevents reuse" ;; *) bad "19 dep-surface diff failure prevents reuse ($out)" ;; esac
+
+# 20. Invalid/unavailable evidence commit prevents reuse
+newrepo 20
+C1=$(git rev-parse HEAD)
+C2=$(mkcommit C20 docs/readme.md)
+out=$(decide_evidence_reuse "$CMD" "$CMD" passed "$LABEL" "not-a-real-commit" "$C2" "$SCOPE" "$SCOPE" "" "$TOOL" "$TOOL" "$ENV" "$ENV")
+case "$out" in stale*) ok "20 invalid evidence commit prevents reuse" ;; *) bad "20 invalid evidence commit prevents reuse ($out)" ;; esac
+
+# 21. scope_intersects_changes directly returns true on Git diff failure
+newrepo 21
+C1=$(git rev-parse HEAD)
+C2=$(mkcommit C21 docs/readme.md)
+if PATH="$FAKE_DIR:$PATH" scope_intersects_changes "$C1" "$C2" "$SCOPE"; then
+  ok "21 scope_intersects_changes fails closed on diff failure"
+else
+  bad "21 scope_intersects_changes returned false on diff failure"
+fi
+
+# 22. scope_intersects_changes returns false on unchanged scope
+newrepo 22
+C1=$(git rev-parse HEAD)
+C2=$(mkcommit C22 docs/readme.md)
+if scope_intersects_changes "$C1" "$C2" "$SCOPE"; then
+  bad "22 scope_intersects_changes returned true on unchanged scope"
+else
+  ok "22 scope_intersects_changes returns false on unchanged scope"
+fi
 
 echo
 echo "Summary: $pass passed, $failn failed"
