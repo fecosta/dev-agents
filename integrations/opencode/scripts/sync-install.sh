@@ -75,6 +75,7 @@ MANIFEST=(
   commands/doctor.md
   commands/sync-install.md
   commands/handoff.md
+  commands/assess.md
   scripts/review-route.sh
   scripts/resolve-model-family.sh
   scripts/doctor.sh

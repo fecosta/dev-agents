@@ -43,7 +43,7 @@ A single `/implement-spec` authorization covers the complete execution cycle for
 | Focused re-review | A fresh reviewer re-inspects everything | Re-review is slower than necessary and may not focus on what changed | §4: targeted scope (original findings + regressions), fresh runtime family resolution, fresh reviewer session |
 | Validation efficiency | Validation is re-run on every cycle | Wasted work when inputs are unchanged | §6: reuse unchanged evidence; targeted validation for remediation; stale-evidence rejection |
 | Decision-ready reporting | Orchestrator report is detailed but not oriented to the next human decision | User must synthesize status across multiple sections | §7: concise terminal report with verdict, resolved/unresolved findings, and recommended next action |
-| Phase A compatibility | Phase A D7 approves stop-after-verdict semantics (U4 not yet landed) | Proposed one-remediation behavior conflicts with D7 as written | §9: amend D7 before U4 lands; preserve Decision Helper advisory-only next-unit behavior |
+| Phase A compatibility | Phase A D7 amended by U1 to allow one bounded automatic remediation cycle; Phase A U4 verifies Decision Helper consistency | Proposed one-remediation behavior must stay aligned with Phase A advisory-only rules | §9: D7 amended; preserve Decision Helper advisory-only next-unit behavior |
 
 ## 3. Bounded automatic remediation
 
@@ -283,29 +283,27 @@ Supervised Execution v1 preserves all existing safeguards:
 
 ## 9. Phase A compatibility
 
-### 9.1 Conflict
+### 9.1 Conflict resolution
 
-The approved Phase A Decision Helper SPEC records decision **D7** (approved, assigned to U4):
+The approved Phase A Decision Helper SPEC records decision **D7** (approved, amended by Supervised Execution U1, verified by Phase A U4):
 
-> The portable `/implement-spec` contract adopts stop-after-verdict semantics. `CHANGES_REQUIRED` must not trigger automatic remediation. Fixes and re-review run only as a new, explicitly user-initiated bounded unit, typically after a `REMEDIATE_FINDINGS` recommendation.
+> Within a single `/implement-spec` authorization, the orchestrator may perform at most one bounded automatic remediation cycle when the initial independent review returns `CHANGES_REQUIRED` and every finding is eligible. After one remediation attempt, any remaining `CHANGES_REQUIRED` verdict stops and requires a new explicitly user-initiated bounded unit. This does not authorize the next unit.
 
-Supervised Execution v1 proposes the opposite behavior: one bounded automatic remediation attempt inside the same `/implement-spec` authorization. This conflicts with D7 as currently worded and with the portable contract in [`commands/implement-spec.md`](../../commands/implement-spec.md) and the core workflow in [`AGENTS.md`](../../AGENTS.md).
-
-The OpenCode integration ([`integrations/opencode/commands/implement-spec.md`](../../integrations/opencode/commands/implement-spec.md) and [`integrations/opencode/agents/orchestrator.md`](../../integrations/opencode/agents/orchestrator.md)) already implements stop-after-verdict; it needs to be updated to permit the one remediation cycle.
+Supervised Execution U1 updated the portable contract in [`commands/implement-spec.md`](../../commands/implement-spec.md) and the core workflow in [`AGENTS.md`](../../AGENTS.md) to match this wording. Supervised Execution U2 updated the OpenCode integration ([`integrations/opencode/commands/implement-spec.md`](../../integrations/opencode/commands/implement-spec.md) and [`integrations/opencode/agents/orchestrator.md`](../../integrations/opencode/agents/orchestrator.md)) to implement the one eligible remediation cycle and stop after a second `CHANGES_REQUIRED`. Phase A U4 verifies that the Decision Helper rules and assessment contract remain consistent with the amended portable/OpenCode contracts, editing only Phase A-specific files.
 
 ### 9.2 Affected decisions and contracts
 
 | Decision / contract | Current state | Owner | Required change |
 | --- | --- | --- | --- |
-| Phase A D7 | Approved stop-after-verdict; U4 not yet landed | Supervised Execution U1 (wording); Phase A U4 (verification of alignment) | Amend D7 wording to allow one bounded automatic remediation attempt per `/implement-spec`; keep advisory-only next-unit behavior |
+| Phase A D7 | Amended to allow one bounded automatic remediation cycle; advisory-only next-unit behavior preserved | Supervised Execution U1 (wording); Phase A U4 (verification of alignment) | Verified consistent with portable/OpenCode contracts |
 | Phase A §6.4 | Decision Helper output does not trigger portable remediation loop | Phase A U4 | Retain: `/assess` remains advisory; `/implement-spec` owns the one remediation attempt |
-| [`commands/implement-spec.md`](../../commands/implement-spec.md) step 17 | "If `CHANGES_REQUIRED`, route fixes, validate, commit, and re-review" | Supervised Execution U1 | Update to one-remediation semantics |
-| [`AGENTS.md`](../../AGENTS.md) core workflow | "Fix material findings, validate, commit, and re-review" | Supervised Execution U1 | Update to one-remediation semantics |
-| OpenCode `/implement-spec` and orchestrator | "Do not automatically remediate `CHANGES_REQUIRED`. Stop after the first verdict." | Supervised Execution U2 | Add the eligible-finding gate and one-remediation loop; stop after second `CHANGES_REQUIRED` |
+| [`commands/implement-spec.md`](../../commands/implement-spec.md) step 17 | One bounded automatic remediation cycle when all findings are eligible | Supervised Execution U1 | Updated |
+| [`AGENTS.md`](../../AGENTS.md) core workflow | One bounded automatic remediation cycle | Supervised Execution U1 | Updated |
+| OpenCode `/implement-spec` and orchestrator | One eligible remediation cycle; stop after second `CHANGES_REQUIRED` | Supervised Execution U2 | Updated |
 
-### 9.3 Recommended resolution
+### 9.3 Resolution status
 
-Implement Supervised Execution U1 and U2 **before** Phase A U4 lands. Supervised Execution U1 updates the wording of D7 in the Phase A SPEC and changes the portable contracts; U2 changes the OpenCode adapter. Phase A U4 then verifies that the Decision Helper rules and assessment contract remain consistent with the amended portable/OpenCode contracts, updating only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does **not** re-edit `AGENTS.md`, `commands/implement-spec.md`, or the OpenCode `/implement-spec` / orchestrator files.
+Supervised Execution U1 and U2 are implemented. Phase A U4 verifies that the Decision Helper rules and assessment contract remain consistent with the amended portable/OpenCode contracts, updating only Phase A-specific files (`policies/verification-assessment.md`, `commands/assess.md`, `integrations/opencode/commands/assess.md`, fixtures). Phase A U4 does **not** re-edit `AGENTS.md`, `commands/implement-spec.md`, or the OpenCode `/implement-spec` / orchestrator files.
 
 Updated D7 wording:
 

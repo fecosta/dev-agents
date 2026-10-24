@@ -28,9 +28,9 @@ SECRET_CFG="SENTINEL-CONFIG-SECRET-4d2e"
 SECRET_ENV="SENTINEL-ENV-SECRET-8b1c"
 
 MANIFEST="agents/orchestrator.md agents/doctor.md agents/sync-install.md
-commands/implement-spec.md commands/route-task.md commands/review-change.md commands/split-spec.md commands/doctor.md commands/sync-install.md commands/handoff.md
+commands/implement-spec.md commands/route-task.md commands/review-change.md commands/split-spec.md commands/doctor.md commands/sync-install.md commands/handoff.md commands/assess.md
 scripts/review-route.sh scripts/resolve-model-family.sh scripts/doctor.sh scripts/sync-install.sh"
-NMAN=14
+NMAN=15
 
 F=""; REPO=""; HM=""; CFG=""; HOOK=""; RUNPATH="$REAL_PATH"
 stub_doctor() { # <mode: pass|warn|fail|exit127|empty>
@@ -174,7 +174,7 @@ run --check
 eq "G exit 1" "$RC" 1
 eq "G missing=2" "$(count missing)" 2
 eq "G different=1" "$(count different)" 1
-eq "G in_sync=11" "$(count in_sync)" 11
+eq "G in_sync=12" "$(count in_sync)" 12
 run --apply
 eq "G apply exit 0" "$RC" 0
 eq "G three copied" "$(printf '%s\n' "$OUT" | grep -c '^copied=')" 3
@@ -528,7 +528,7 @@ mkbin "$F/bin2" none; RUNPATH="$F/bin2"; run --check
 hasline "R9 checksum_tool=cksum" "$OUT" "checksum_tool=cksum"
 eq "R9 cksum detects drift" "$RC" 1
 eq "R9 cksum drift status" "$(status_of agents/doctor.md)" different
-eq "R9 cksum others in_sync" "$(count in_sync)" 13
+eq "R9 cksum others in_sync" "$(count in_sync)" 14
 cp "$REPO/integrations/opencode/agents/doctor.md" "$CFG/agents/doctor.md"; run --check
 eq "R9 cksum clean when identical" "$RC" 0
 printf 'dummy agents/doctor.md v2\n' >"$CFG/agents/doctor.md"; run --check
@@ -925,6 +925,42 @@ eq "handoff status in_sync after apply" "$(status_of commands/handoff.md)" in_sy
 mkfix ho2; install_all; echo changed >"$CFG/commands/handoff.md"
 run --check
 eq "handoff different detected" "$(status_of commands/handoff.md)" different
+
+# /assess: managed command (manifest, fresh install, preview, apply, re-check)
+if grep -qx '  commands/assess.md' "$SCRIPT_UNDER_TEST"; then ok "assess in script manifest"; else bad "assess in script manifest"; fi
+mkfix as; before=$(snap "$F")
+run --check
+eq "assess preview exit 1 (empty install)" "$RC" 1
+eq "assess preview status missing" "$(status_of commands/assess.md)" missing
+hasline "assess preview would_copy" "$OUT" "would_copy=commands/assess.md"
+eq "assess preview no writes" "$(snap "$F")" "$before"
+run --apply
+eq "assess apply exit 0" "$RC" 0
+hasline "assess apply copied" "$OUT" "copied=commands/assess.md"
+eq "assess installed content" "$(fsum "$CFG/commands/assess.md")" "$(fsum "$REPO/integrations/opencode/commands/assess.md")"
+eq "assess installed mode 644" "$(ls -l "$CFG/commands/assess.md" | cut -c1-10)" "-rw-r--r--"
+run --check
+eq "assess check clean after apply" "$RC" 0
+eq "assess status in_sync after apply" "$(status_of commands/assess.md)" in_sync
+mkfix as2; install_all; echo changed >"$CFG/commands/assess.md"
+run --check
+eq "assess different detected" "$(status_of commands/assess.md)" different
+
+# /assess: required structure and safety text of the real command file
+AF="$HERE/../commands/assess.md"
+if [ -f "$AF" ]; then
+  af=$(cat "$AF")
+  contains "assess frontmatter agent" "$af" "agent: orchestrator"
+  contains "assess frontmatter subagent false" "$af" "subagent: false"
+  for a in "Assessment:" "Decision Helper" "advisory only" "Executes nothing"; do
+    contains "assess section/safety $a" "$af" "$a"
+  done
+  for t in "Do not edit files" "Allowed shell use is read-only Git inspection only" "Do not authorize another bounded unit"; do
+    contains "assess safety text: $t" "$af" "$t"
+  done
+else
+  bad "assess command file missing"
+fi
 
 # /handoff: required structure and safety text of the real command file
 HF="$HERE/../commands/handoff.md"
