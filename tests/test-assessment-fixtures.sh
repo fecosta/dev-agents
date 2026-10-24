@@ -47,7 +47,13 @@ derive_readiness() {
     PASS@*|PASS_WITH_NOTES@*|CHANGES_REQUIRED@*)
       local rc="${review#*@}"
       local rv="${review%%@*}"
-      if [ "$rc" = "$assessed_commit" ]; then review_state="$rv"; else review_state="stale"; fi
+      if [ "$rc" = "none" ] || [ -z "$rc" ]; then
+        review_state="unknown"
+      elif [ "$rc" = "$assessed_commit" ]; then
+        review_state="$rv"
+      else
+        review_state="stale"
+      fi
       ;;
     not_required*) review_state="not_required" ;;
     pending*) review_state="pending" ;;
@@ -232,7 +238,7 @@ for f in "$FIXDIR"/*.md; do
     if ! grep -qE "^$k:" "$f"; then bad "$name missing key $k"; else ok "$name has key $k"; fi
   done
   # basis label
-  if grep -qE '^basis: assumption-based fixture \(not a historical record\)' "$f"; then ok "$name basis label"; else bad "$name basis label"; fi
+  if grep -qE '^basis: (assumption-based|regression) fixture \(not a historical record\)' "$f"; then ok "$name basis label"; else bad "$name basis label"; fi
   # readiness domain
   r=$(value_of expected_readiness "$f")
   found=0; for v in "${valid_readiness[@]}"; do [ "$v" = "$r" ] && { found=1; break; }; done

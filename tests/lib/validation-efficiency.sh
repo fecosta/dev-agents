@@ -82,12 +82,21 @@ decide_evidence_reuse() {
     return
   fi
 
-  # Tool version and relevant environment must be unchanged when declared.
-  if [ -n "$evidence_tool" ] && [ "$evidence_tool" != "$current_tool" ]; then
+  # Tool version and relevant environment must be established and unchanged.
+  # Empty fingerprints are indeterminate and fail closed.
+  if [ -z "$evidence_tool" ] || [ -z "$current_tool" ]; then
+    echo "stale tool_version indeterminate"
+    return
+  fi
+  if [ "$evidence_tool" != "$current_tool" ]; then
     echo "stale tool_version changed from '$evidence_tool' to '$current_tool'"
     return
   fi
-  if [ -n "$evidence_env" ] && [ "$evidence_env" != "$current_env" ]; then
+  if [ -z "$evidence_env" ] || [ -z "$current_env" ]; then
+    echo "stale env_fingerprint indeterminate"
+    return
+  fi
+  if [ "$evidence_env" != "$current_env" ]; then
     echo "stale env_fingerprint changed from '$evidence_env' to '$current_env'"
     return
   fi
