@@ -33,10 +33,10 @@ Preferred: from the dev-agents checkout, preview and then apply the sync (see "S
 ./integrations/opencode/scripts/sync-install.sh --apply
 ```
 
-**First-time bootstrap** (the `/sync-install` command and agent are not installed yet; the helper itself runs from the checkout, so `--apply` also works without any bootstrap). To install by hand, copy exactly these files (14) from `integrations/opencode/` to `~/.config/opencode/` (same relative paths, scripts executable):
+**First-time bootstrap** (the `/sync-install` command and agent are not installed yet; the helper itself runs from the checkout, so `--apply` also works without any bootstrap). To install by hand, copy exactly these files (15) from `integrations/opencode/` to `~/.config/opencode/` (same relative paths, scripts executable):
 
 - `agents/`: `orchestrator.md`, `doctor.md`, `sync-install.md`
-- `commands/`: `implement-spec.md`, `route-task.md`, `review-change.md`, `split-spec.md`, `doctor.md`, `sync-install.md`, `handoff.md`
+- `commands/`: `implement-spec.md`, `route-task.md`, `review-change.md`, `split-spec.md`, `doctor.md`, `sync-install.md`, `handoff.md`, `assess.md`
 - `scripts/` (mode 755): `review-route.sh`, `resolve-model-family.sh`, `doctor.sh`, `sync-install.sh`
 
 `agents/doctor.md` and `agents/sync-install.md` are separate, narrowly permissioned agents used only by `/doctor` and `/sync-install`; they do not touch or replace the orchestrator.
@@ -206,7 +206,7 @@ Direct equivalents, run from the dev-agents checkout:
 
 ```text
 agents/orchestrator.md  agents/doctor.md  agents/sync-install.md
-commands/implement-spec.md  commands/route-task.md  commands/review-change.md  commands/split-spec.md  commands/doctor.md  commands/sync-install.md  commands/handoff.md
+commands/implement-spec.md  commands/route-task.md  commands/review-change.md  commands/split-spec.md  commands/doctor.md  commands/sync-install.md  commands/handoff.md  commands/assess.md
 scripts/review-route.sh  scripts/resolve-model-family.sh  scripts/doctor.sh  scripts/sync-install.sh
 ```
 
